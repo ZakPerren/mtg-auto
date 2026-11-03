@@ -1,0 +1,1 @@
+{"name":"mtg-auto","version":"1.0.0","private":true,"type":"module","scripts":{"build":"node build/bundle.mjs","data":"node build/build-data.mjs"},"devDependencies":{"esbuild":"^0.28.2","mana-font":"^1.18.0"}}
