@@ -227,3 +227,11 @@ button.mini.add { color: var(--ok); border-color: #3d6b4b; }
 .archrow { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; width: 100%; text-align: left; margin: 4px 0; }
 .archrow small { display: block; color: var(--muted); font-size: 12px; }
 #view > .editbar { max-width: 980px; margin: 0 auto 10px; }
+
+.lib-tools button { min-height: 34px; padding: 4px 10px; font-size: 13px; }
+.lib-tools button.on { border-color: var(--accent); color: var(--accent2); }
+.lib-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 55vh; overflow-y: auto; }
+.lib-row { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; background: var(--panel2); border-radius: 10px; padding: 6px; }
+.lib-name small { display: block; color: var(--muted); font-size: 12px; }
+.lib-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.lib-acts button { min-height: 30px; padding: 2px 8px; font-size: 12px; }
