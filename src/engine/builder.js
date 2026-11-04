@@ -475,6 +475,12 @@ function buildManabase(ctx, run, deck, L) {
     const onColour = [...prod].filter(x => colors.includes(x));
     const offOnly = prod.length && !onColour.length && !prod.includes('C');
     if (offOnly) continue;
+    // only lands whose coloured mana is all useful: a U/B dual in a W/B/R deck is just a worse Swamp, so skip it.
+    // Lands that make any colour (or fetch any basic) are fine — they'll only ever be used for your colours.
+    const coloured = [...prod].filter(x => x !== 'C');
+    const anyColour = new Set(coloured).size >= 5;
+    if (opts.mode !== 'commander' && /commander's colou?r identity/.test(c.text)) continue; // e.g. Command Tower does nothing outside Commander
+    if (!anyColour && coloured.some(x => !colors.includes(x))) continue;
     if (opts.mode === 'commander' && ![...c.identity].every(x => colors.includes(x))) continue;
     let v = onColour.length * 10 + (onColour.length >= 2 ? 15 : 0) + (run.splash && prod.includes(run.splash) ? 12 : 0);
     if (!prod) v = -5;
