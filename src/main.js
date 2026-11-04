@@ -430,7 +430,9 @@ function viewDeck(v) {
     <h3 class="grp">Lands <span class="muted">${r.L}</span></h3>
     ${mb.nonbasics.map(c => cardRow(c, { right: '<b>1</b>', sub: 'makes ' + (c.produces || '—') })).join('')}
     ${basics.map(([c, n]) => `<div class="crow"><span class="cost">${pip(c)}</span><span class="cname">${BASIC_NAME[c]}</span><span class="right"><b>${n}</b></span></div>`).join('')}
-    <p class="hint">Sources: ${[...r.colors].map(c => `${pip(c)} ${mb.sources[c]}`).join(' · ')}</p>
+    <p class="hint">Sources: ${[...r.colors].map(c => `${pip(c)} ${mb.sources[c]}`).join(' · ')}${mb.fixingLands ? ` · ${mb.fixingLands} dual/fixing land${mb.fixingLands > 1 ? 's' : ''}` : ''}</p>
+    ${mb.consistency ? `<div class="mana-risk risk-${mb.consistency.risk.toLowerCase()}"><b>Colour risk: ${mb.consistency.risk}</b> — ${Math.round(mb.consistency.onCurve * 100)}% of spells have their colours on curve, ${Math.round(mb.consistency.within2 * 100)}% within 2 turns.
+      ${mb.consistency.worst.filter(x => x.pOn < 0.8).length ? `<br><small>Least reliable: ${mb.consistency.worst.filter(x => x.pOn < 0.8).slice(0, 3).map(x => `${esc(x.name.split(' // ')[0])} ${Math.round(x.pOn * 100)}% on turn ${x.turn}`).join(' · ')}</small>` : ''}</div>` : ''}
   </section>
   <section class="card">
     <h2>Why this deck</h2>
@@ -439,7 +441,7 @@ function viewDeck(v) {
       <tr><td>Synergy</td><td>+${Math.round(r.breakdown.synergy)}</td></tr>
       <tr><td>Curve & composition</td><td>${Math.round(r.breakdown.composition)}</td></tr>
       ${r.breakdown.splash ? `<tr><td>Splash cost</td><td>${Math.round(r.breakdown.splash)}</td></tr>` : ''}
-      ${r.breakdown.mana ? `<tr><td>Mana base</td><td>${Math.round(r.breakdown.mana)}</td></tr>` : ''}
+      ${r.breakdown.mana ? `<tr><td>Colour-screw risk (expected loss)</td><td>${Math.round(r.breakdown.mana)}</td></tr>` : ''}
       ${r.breakdown.combo ? `<tr><td>Combos</td><td>+${Math.round(r.breakdown.combo)}</td></tr>` : ''}
       ${r.breakdown.cast ? `<tr><td>Hybrid/duplicate costs</td><td>${Math.round(r.breakdown.cast)}</td></tr>` : ''}
       <tr class="tot"><td>Total</td><td>${r.score}</td></tr>

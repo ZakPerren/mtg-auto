@@ -2,10 +2,11 @@
 import { WUBRG, sortColors, castableWith, pips } from './card.js';
 import { analyse, pairSynergy, themeLabel, linkText, ROLE_LABEL } from './tags.js';
 import { powerOf } from './power.js';
+import { consistency } from './mana.js';
 
 export const PRESETS = {
-  sealed: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 2, splash: true, label: 'Sealed / Prerelease (40)' },
-  draft: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 2, splash: true, label: 'Draft (40)' },
+  sealed: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, label: 'Sealed / Prerelease (40)' },
+  draft: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, label: 'Draft (40)' },
   constructed: { mode: 'constructed', deckSize: 60, basicsFree: true, singleton: false, maxColors: 3, splash: false, label: 'Constructed (60)' },
   brawl: { mode: 'commander', deckSize: 60, basicsFree: true, singleton: true, maxColors: 5, splash: false, label: 'Brawl (60, singleton)' },
   commander: { mode: 'commander', deckSize: 100, basicsFree: true, singleton: true, maxColors: 5, splash: false, label: 'Commander (100, singleton)' },
@@ -152,9 +153,17 @@ export function buildDecks(poolEntries, rawOpts, combos = [], onProgress) {
   // quick pre-score to prune colour options
   const ctxBase = { opts, style, spells, lands, syn, synW, values, n, combos };
   const scored = runs.map(r => ({ r, est: estimate(ctxBase, r) })).sort((a, b) => b.est - a.est);
-  const limit = opts.mode === 'commander' ? 4 : Math.min(scored.length, 12);
+  // keep the best few of each shape (mono, two-colour, two+splash, three+, ...) so no shape is crowded out before the real mana maths runs
+  let chosenRuns;
+  if (opts.mode === 'commander') chosenRuns = scored.slice(0, 4).map(x => x.r);
+  else {
+    const byShape = new Map();
+    for (const x of scored) { const k = x.r.main.length + (x.r.splash ? 's' : ''); if (!byShape.has(k)) byShape.set(k, []); byShape.get(k).push(x.r); }
+    chosenRuns = [...byShape.values()].flatMap(list => list.slice(0, 5));
+  }
+  const limit = chosenRuns.length;
   for (let k = 0; k < limit; k++) {
-    const run = scored[k].r;
+    const run = chosenRuns[k];
     onProgress?.((k + 1) / limit, run);
     const res = optimise(ctxBase, run);
     if (res) results.push(res);
@@ -300,7 +309,7 @@ function commanderSyn(ctx, run, i) {
 // Splashing is for high-impact, later-game cards: cheap or low-impact splash cards cost more.
 function splashCost(ctx, run, i) {
   const e = ctx.spells[i]; const c = e.card;
-  let cost = ctx.opts.mode === 'limited' ? 8 : 6;
+  let cost = 2; // the mana-consistency maths already charges for the colour risk; this is just splash discipline
   if (c.cmc <= 2) cost += 6;
   if (e.power < 70) cost += 5;
   if (!c.tags.roles.has('removal') && !c.tags.roles.has('wipe') && e.power < 80) cost += 3;
@@ -505,17 +514,23 @@ function buildManabase(ctx, run, deck, L) {
     for (const x of WUBRG) if (basics[x] > (poolBasics[x] || 0)) { warnings.push(`Pool only has ${poolBasics[x] || 0} ${BASIC_FOR[x]} – wanted ${basics[x]}.`); basics[x] = poolBasics[x] || 0; }
   }
   for (const x of WUBRG) sources[x] += basics[x];
-  // score: castability check (Karsten-style approximations for 40/60-card decks)
-  let score = 0; const shortfalls = [];
+  // Colour consistency: probability each spell has its coloured sources on curve / within 2 turns (hypergeometric).
+  // This is a cost, not a ban: 3-5 colour decks still compete, they just pay for the real risk of colour screw.
+  const counts = new Map(); for (const i of deck.list) counts.set(i, (counts.get(i) || 0) + 1);
+  const deckSpells = [...counts].map(([i, count]) => { spells[i].card.__value = ctx.values[i]; return { card: spells[i].card, count }; });
+  const cons = consistency(deckSpells, sources, opts.deckSize);
+  const scale = deck.list.length / 23;
+  // expected value lost to colour screw: each card's value × chance it's stuck on curve (light) or still stuck 2 turns later (heavy)
+  let score = -cons.loss;
+  const fixingLands = chosen.filter(c => [...(c.produces || '')].filter(x => colors.includes(x)).length >= 2).length;
+  const shortfalls = [];
   for (const x of colors) {
-    const need1 = isLimited ? 6 : 9; const need2 = isLimited ? 8 : 12; const need3 = isLimited ? 10 : 15;
-    const need = maxPips[x] >= 3 ? need3 : maxPips[x] >= 2 ? need2 : maxPips[x] >= 1 ? (run.splash === x ? 3 : need1) : 0;
-    if (sources[x] < need) { const gap = need - sources[x]; score -= gap * (maxPips[x] >= 2 ? 3 : 2); shortfalls.push({ color: x, have: sources[x], want: need }); }
+    const need = maxPips[x] >= 3 ? (isLimited ? 10 : 15) : maxPips[x] >= 2 ? (isLimited ? 8 : 12) : maxPips[x] >= 1 ? (run.splash === x ? 3 : (isLimited ? 6 : 9)) : 0;
+    if (sources[x] < need) shortfalls.push({ color: x, have: sources[x], want: need });
   }
-  if (run.splash) score -= Math.max(0, 3 - [...chosen].filter(c => (c.produces || '').includes(run.splash)).length) * 1.5;
   const totalLands = chosen.length + WUBRG.reduce((a, x) => a + basics[x], 0);
   if (totalLands < L) warnings.push(`Only ${totalLands} lands available — deck is ${L - totalLands} short.`);
-  return { nonbasics: chosen, basics, sources, demand, score, shortfalls, warnings, L };
+  return { nonbasics: chosen, basics, sources, demand, score, shortfalls, warnings, L, consistency: cons, fixingLands };
 }
 
 // ---------------- explanation ----------------
@@ -561,6 +576,10 @@ function explain(ctx, r, synWhy) {
     if (curve[2] < 4) w.push(`Only ${curve[2]} two-drops — you may fall behind early.`);
     if (removal < 3) w.push('Light on removal — consider any playable interaction from the sideboard.');
   }
+  const cons = r.manabase.consistency;
+  const nCol = r.colors.length;
+  if (nCol >= 3 && cons.risk !== 'Low') w.push(`${nCol}-colour deck with ${r.manabase.fixingLands} dual/fixing land${r.manabase.fixingLands === 1 ? '' : 's'}: about ${Math.round((1 - cons.onCurve) * 100)}% of spells won't have their colours on curve — real risk of colour screw. Pick up any fixing you can.`);
+  else if (cons.risk === 'High') w.push(`Colour risk is high: about ${Math.round((1 - cons.onCurve) * 100)}% of spells won't have their colours on curve.`);
   for (const s of r.manabase.shortfalls) w.push(`${s.color} has ${s.have} sources; ${s.want} recommended for its heaviest cost.`);
   r.warnings = w;
   r.combosIn = r.breakdown.combosIn;

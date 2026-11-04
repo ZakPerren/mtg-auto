@@ -7,7 +7,7 @@ const { chromium } = require('playwright');
   p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   p.on('pageerror', e => errs.push('PAGEERR ' + e.message));
   const t0 = Date.now();
-  await p.goto('http://localhost:8766/');
+  await p.goto('http://localhost:8770/');
   await p.waitForSelector('#poolSel', { timeout: 30000 });
   console.log('loaded in', Date.now() - t0, 'ms');
   // add set
@@ -34,18 +34,18 @@ const { chromium } = require('playwright');
   await p.screenshot({ path: '/tmp/shots/5-card.png' });
   await p.click('.sheet .close');
   // rules
-  await p.goto('http://localhost:8766/#rules'); await p.waitForSelector('#rq');
+  await p.goto('http://localhost:8770/#rules'); await p.waitForSelector('#rq');
   await p.fill('#rq', 'deathtouch trample'); await p.waitForTimeout(400);
   for (const q of ['blood artist', 'viscera seer']) { await p.fill('#ixIn', q); await p.waitForTimeout(150); await p.click('#ixList .acitem'); await p.waitForTimeout(150); }
   await p.screenshot({ path: '/tmp/shots/6-rules.png', fullPage: true });
   await p.click('.rref'); await p.waitForTimeout(200); await p.screenshot({ path: '/tmp/shots/7-rule-modal.png' });
   await p.goBack(); await p.waitForTimeout(200);
-  await p.goto('http://localhost:8766/#cards'); await p.fill('#cq', 't:dragon c:r mv<=5 s:sos'); await p.waitForTimeout(500);
+  await p.goto('http://localhost:8770/#cards'); await p.fill('#cq', 't:dragon c:r mv<=5 s:sos'); await p.waitForTimeout(500);
   console.log('card search results', await p.$$eval('#cres .crow', e => e.length));
-  await p.goto('http://localhost:8766/#data'); await p.waitForTimeout(300); await p.screenshot({ path: '/tmp/shots/8-data.png', fullPage: true });
+  await p.goto('http://localhost:8770/#data'); await p.waitForTimeout(300); await p.screenshot({ path: '/tmp/shots/8-data.png', fullPage: true });
   // inner screen
-  await p.setViewportSize({ width: 780, height: 880 }); await p.goto('http://localhost:8766/#deck'); await p.waitForTimeout(300);
-  await p.goto('http://localhost:8766/#build'); await p.click('#go'); await p.waitForSelector('.decklist');
+  await p.setViewportSize({ width: 780, height: 880 }); await p.goto('http://localhost:8770/#deck'); await p.waitForTimeout(300);
+  await p.goto('http://localhost:8770/#build'); await p.click('#go'); await p.waitForSelector('.decklist');
   await p.screenshot({ path: '/tmp/shots/9-deck-inner.png' });
   console.log('errors', errs);
   await b.close();
