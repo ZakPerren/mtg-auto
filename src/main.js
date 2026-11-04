@@ -9,7 +9,7 @@ import { analyse, ROLE_LABEL, themeLabel, GOALS } from './engine/tags.js';
 import { powerOf } from './engine/power.js';
 import { Rules } from './engine/rules.js';
 import { combosInPool, spellbookCombos } from './engine/combos.js';
-import { openPlaytest, precacheImages } from './ui/playtest.js';
+import { openPlaytest, precacheImages, setPlaytestPersistence, restorePlaytest } from './ui/playtest.js';
 import { $, $$, esc, manaHtml, textHtml, colorGroup, GROUP_LABEL, COLOR_ORDER, pip, toast, debounce, rarityLetter } from './ui/util.js';
 
 const APP_VERSION = '__VERSION__';
@@ -27,7 +27,7 @@ const S = {
   decks: ls.get('decks', []),
   tab: 'pool', poolMode: ls.get('poolMode', 'search'),
   browse: { color: '', rarity: '', q: '' },
-  interact: [],
+  interact: ls.get('interact', []),
 };
 const save = () => { ls.set('pools', S.pools); ls.set('poolId', S.poolId); ls.set('opts', S.opts); ls.set('decks', S.decks); ls.set('poolMode', S.poolMode); };
 const pool = () => S.pools.find(p => p.id === S.poolId) || S.pools[0];
@@ -59,7 +59,14 @@ async function boot() {
     addEventListener('online', () => $('#netstate').textContent = 'online');
     addEventListener('offline', () => $('#netstate').textContent = 'offline');
     window.addEventListener('hashchange', route);
+    setPlaytestPersistence((st) => ls.set('playtest', st));
+    restoreSession();
     route();
+    // keep each tab's scroll position, so a reload (e.g. unfolding the phone) lands where you were
+    const view = $('#view');
+    view.addEventListener('scroll', debounce(() => { const sc = ls.get('scroll', {}); sc[S.tab] = view.scrollTop; ls.set('scroll', sc); }, 200));
+    const saved = ls.get('scroll', {})[S.tab]; if (saved) requestAnimationFrame(() => { view.scrollTop = saved; });
+    const pt = ls.get('playtest', null); if (pt) restorePlaytest(pt, (n) => db.get(n));
   } catch (e) {
     status.textContent = 'Failed to load data: ' + e.message;
     console.error(e);
@@ -385,6 +392,35 @@ function archPanel(entries) {
     ${rows.map(({ a, fit, playable }) => `<button class="archrow" data-arch="${a.pair}"><span class="pips">${[...a.pair].map(c => pip(c)).join('')}</span><span class="al"><b>${esc(a.name)}</b> — ${esc(a.label)}<small>${a.signposts.slice(0, 3).map(n => esc(n.split(' // ')[0])).join(', ')}</small></span><b>${fit}/${playable}</b></button>`).join('')}</section>`;
 }
 
+// ---- session restore: rebuild the last deck (deterministic) and re-apply edits ----
+function poolSignature() { return JSON.stringify([pool().id, pool().items.map(x => [x.name, x.count]).sort()]); }
+function saveSession() {
+  if (!S.result) { ls.set('session', null); return; }
+  const r = S.result.results[S.resultIdx];
+  const edits = r.orig ? { list: r.deck.list.map(i => r.ctx.spells[i].card.name), manual: r.manual ? { nonbasics: r.manual.nonbasics.map(c => c.name), basics: r.manual.basics } : null } : null;
+  ls.set('session', { sig: poolSignature(), opts: S.lastOpts, combos: S.result.combosInPool || [], resultIdx: S.resultIdx, editing: !!S.editing, edits, comboNote: S.result.comboNote });
+}
+function restoreSession() {
+  const ss = ls.get('session', null);
+  if (!ss || ss.sig !== poolSignature() || !ss.opts) return;
+  try {
+    const o = { ...ss.opts };
+    if (o.mode === 'limited' && o.sets?.length) o.archetypes = setArchetypes(db, o.sets);
+    const out = buildDecks(poolEntries(), o, ss.combos || []);
+    if (!out.results?.length) return;
+    out.opts = o; out.combosInPool = ss.combos || []; out.comboNote = ss.comboNote; out.ms = 0;
+    S.result = out; S.lastOpts = ss.opts; S.resultIdx = Math.min(ss.resultIdx || 0, out.results.length - 1); S.editing = ss.editing;
+    const r = out.results[S.resultIdx];
+    if (ss.edits) {
+      r.orig = { score: r.score, list: [...r.deck.list], L: r.L };
+      const idx = (name) => r.ctx.spells.findIndex(e => e.card.name === name);
+      r.deck.list = ss.edits.list.map(idx).filter(i => i >= 0);
+      if (ss.edits.manual) r.manual = { nonbasics: ss.edits.manual.nonbasics.map(n => db.get(n)).filter(Boolean), basics: ss.edits.manual.basics };
+      rescore(r);
+    }
+  } catch (e) { console.warn('session restore failed', e); }
+}
+
 async function runBuild() {
   const prog = $('#progress');
   const entries = poolEntries();
@@ -412,6 +448,7 @@ async function runBuild() {
   out.comboNote = comboNote; out.combosInPool = combos; out.opts = o;
   if (out.error || !out.results.length) { prog.innerHTML = `<p class="warn">${esc(out.error || 'No deck could be built with these restrictions — try allowing more colours or removing must-include cards.')}</p>`; return; }
   S.result = out; S.resultIdx = 0; S.editing = false;
+  const { archetypes, ...plainOpts } = o; S.lastOpts = plainOpts; saveSession();
   location.hash = 'deck';
 }
 function guessSets(entries) {
@@ -484,11 +521,11 @@ function viewDeck(v) {
     ${S.editing ? spareLands(r).map(c => cardRow(c, { right: `<button class="mini add" data-inland="${esc(c.name)}">+</button>`, sub: 'land · makes ' + (c.produces || '—') })).join('') : ''}
     <p class="hint">Built in ${out.ms} ms from ${out.poolSize} cards. Card values: ${esc(scoreSourceNote(r))}</p>
   </section>`;
-  $$('[data-res]').forEach(b => b.onclick = () => { S.resultIdx = +b.dataset.res; render(); });
-  $('#editDeck').onclick = () => { S.editing = !S.editing; render(); };
+  $$('[data-res]').forEach(b => b.onclick = () => { S.resultIdx = +b.dataset.res; saveSession(); render(); });
+  $('#editDeck').onclick = () => { S.editing = !S.editing; saveSession(); render(); };
   const edit = (fn) => {
     r.orig ||= { score: r.score, list: [...r.deck.list], L: r.L };
-    fn(); rescore(r);
+    fn(); rescore(r); saveSession();
     const y = v.scrollTop; render(); v.scrollTop = y;
   };
   const manual = () => (r.manual ||= { nonbasics: [...r.manabase.nonbasics], basics: { ...r.manabase.basics } });
@@ -497,7 +534,7 @@ function viewDeck(v) {
   $$('[data-outland]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => manual().nonbasics.splice(+b.dataset.outland, 1)); });
   $$('[data-inland]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => manual().nonbasics.push(r.ctx.lands.find(l => l.card.name === b.dataset.inland).card)); });
   $$('[data-basic]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => { const m = manual(); m.basics[b.dataset.basic] = Math.max(0, (m.basics[b.dataset.basic] || 0) + +b.dataset.d); }); });
-  if ($('#resetEdit')) $('#resetEdit').onclick = () => { if (!r.orig) return; r.deck.list = [...r.orig.list]; r.L = r.orig.L; delete r.manual; rescore(r); delete r.orig; render(); };
+  if ($('#resetEdit')) $('#resetEdit').onclick = () => { if (!r.orig) return; r.deck.list = [...r.orig.list]; r.L = r.orig.L; delete r.manual; rescore(r); delete r.orig; saveSession(); render(); };
   const deckList = () => {
     const list = r.cards.map(x => ({ card: x.card, count: x.count }));
     const nb = new Map(); for (const c of r.manabase.nonbasics) nb.set(c, (nb.get(c) || 0) + 1);
@@ -586,13 +623,13 @@ function viewRules(v) {
     $('#rres').innerHTML = (gl.length ? `<div class="gloss">${gl.map(g => `<p><b>${esc(g.term)}</b> — ${linkRules(g.text)}</p>`).join('')}</div>` : '') +
       res.map(x => `<div class="rule"><a data-rule="${x.id}" class="rid">${x.id}</a> ${linkRules(rules.text(x.id))}</div>`).join('');
   }, 150);
-  $('#rq').oninput = () => { S.rq = $('#rq').value; show(); };
-  if (S.rq) { $('#rq').value = S.rq; show(); }
+  $('#rq').oninput = () => { S.rq = $('#rq').value; ls.set('rq', S.rq); show(); };
+  S.rq ||= ls.get('rq', ''); if (S.rq) { $('#rq').value = S.rq; show(); }
   v.onclick = (e) => { const a = e.target.closest('[data-rule]'); if (a) { e.preventDefault(); openRule(a.dataset.rule); } };
   const inp = $('#ixIn'), lst = $('#ixList'); let items = [];
   inp.oninput = debounce(() => { items = db.search(inp.value, { limit: 8 }); lst.innerHTML = items.map((c, i) => `<button class="acitem" data-i="${i}"><span class="cost">${manaHtml(c.manaCost)}</span><span class="cname">${esc(c.name)}</span></button>`).join(''); }, 60);
-  lst.onclick = (e) => { const b = e.target.closest('.acitem'); if (!b) return; S.interact.push(items[+b.dataset.i].name); render(); };
-  $$('[data-rmix]').forEach(b => b.onclick = () => { S.interact = S.interact.filter(n => n !== b.dataset.rmix); render(); });
+  lst.onclick = (e) => { const b = e.target.closest('.acitem'); if (!b) return; S.interact.push(items[+b.dataset.i].name); ls.set('interact', S.interact); render(); };
+  $$('[data-rmix]').forEach(b => b.onclick = () => { S.interact = S.interact.filter(n => n !== b.dataset.rmix); ls.set('interact', S.interact); render(); });
   if (S.interact.length) renderInteraction($('#ixOut'));
 }
 function linkRules(text) {
@@ -632,7 +669,8 @@ function viewCards(v) {
     const res = db.query(q, 150);
     $('#cres').innerHTML = res.map(c => cardRow(c, { sub: esc(c.typeLine), right: countInPool(c) ? `<b>${countInPool(c)}</b>` : '' })).join('') || '<p class="muted">No matches.</p>';
   }, 200);
-  $('#cq').oninput = run;
+  $('#cq').oninput = () => { ls.set('cq', $('#cq').value); run(); };
+  const lastQ = ls.get('cq', ''); if (lastQ) { $('#cq').value = lastQ; run(); }
   bindCardOpen($('#cres'));
 }
 

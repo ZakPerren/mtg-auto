@@ -8,17 +8,43 @@ let uid = 0;
 
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
+let persist = null; // callback(state|null) so the game survives the app being reloaded (e.g. unfolding the Fold)
+export function setPlaytestPersistence(fn) { persist = fn; }
+
 export function openPlaytest(deckList, title = 'Playtest') {
   // deckList: [{card, count}]
   G = { deckList, title, life: 20, opp: 20, turn: 0, library: [], hand: [], battlefield: [], graveyard: [], exile: [], mulligans: 0, bottomNeeded: 0, log: [] };
+  mount();
+  newGame();
+}
+function mount() {
   root = document.createElement('div');
   root.className = 'ptest';
   document.body.appendChild(root);
   document.body.classList.add('pt-open');
-  newGame();
 }
 
-function close() { root?.remove(); root = null; document.body.classList.remove('pt-open'); }
+// Serialise / restore by card name so the saved game is small and survives a reload
+const ZONES = ['library', 'hand', 'battlefield', 'graveyard', 'exile'];
+function snapshot() {
+  const z = (list) => list.map(o => o.token ? { t: 1, n: o.card.name, p: o.card.power, tg: o.card.toughness, tp: o.tapped, c: o.counters } : { n: o.card.name, tp: o.tapped, c: o.counters });
+  return { title: G.title, life: G.life, opp: G.opp, turn: G.turn, phase: G.phase, mulligans: G.mulligans, bottomNeeded: G.bottomNeeded, landPlayed: G.landPlayed,
+    deck: G.deckList.map(x => [x.card.name, x.count]), ...Object.fromEntries(ZONES.map(k => [k, z(G[k])])) };
+}
+export function restorePlaytest(saved, getCard) {
+  try {
+    const deckList = saved.deck.map(([n, count]) => ({ card: getCard(n), count })).filter(x => x.card);
+    G = { deckList, title: saved.title, life: saved.life, opp: saved.opp, turn: saved.turn, phase: saved.phase, mulligans: saved.mulligans, bottomNeeded: saved.bottomNeeded, landPlayed: saved.landPlayed, log: [] };
+    for (const k of ZONES) G[k] = (saved[k] || []).map(o => o.t
+      ? { id: ++uid, token: true, tapped: o.tp, counters: o.c, card: tokenCard(o.n, o.p, o.tg) }
+      : { id: ++uid, card: getCard(o.n), tapped: o.tp, counters: o.c }).filter(o => o.card);
+    mount(); render();
+    return true;
+  } catch { return false; }
+}
+function tokenCard(name, p, t) { return { name, manaCost: '', typeLine: 'Token Creature', oracle: '', fullText: '', faces: [], power: p, toughness: t, isLand: false, isInstantSorcery: false }; }
+
+function close() { root?.remove(); root = null; document.body.classList.remove('pt-open'); persist?.(null); }
 
 function newGame() {
   G.library = shuffle(G.deckList.flatMap(({ card, count }) => Array.from({ length: count }, () => ({ id: ++uid, card, tapped: false, counters: 0 }))));
@@ -101,6 +127,7 @@ function render() {
   <div class="pt-hand-bar"><span>Hand ${G.hand.length}${G.landPlayed ? ' · land played' : ''}</span><button class="primary" data-a="next" ${G.phase !== 'play' ? 'disabled' : ''}>Next turn ▸</button></div>
   <div class="pt-row hand">${G.hand.map(o => cardFace(o, 'big')).join('')}</div>`;
   root.onclick = onClick;
+  persist?.(snapshot());
 }
 
 function onClick(e) {
@@ -185,7 +212,7 @@ function makeToken() {
     const name = m.querySelector('#tkName').value || 'Token';
     const [p, t] = (m.querySelector('#tkPT').value || '1/1').split('/');
     const n = Math.max(1, Math.min(20, +m.querySelector('#tkN').value || 1));
-    for (let i = 0; i < n; i++) G.battlefield.push({ id: ++uid, token: true, tapped: false, counters: 0, card: { name, manaCost: '', typeLine: 'Token Creature', oracle: '', fullText: '', faces: [], power: p, toughness: t, isLand: false, isInstantSorcery: false } });
+    for (let i = 0; i < n; i++) G.battlefield.push({ id: ++uid, token: true, tapped: false, counters: 0, card: tokenCard(name, p, t) });
     m.remove(); render();
   };
   m.onclick = (e) => { if (e.target === m) m.remove(); };
