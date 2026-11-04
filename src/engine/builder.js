@@ -274,6 +274,7 @@ const ARCH_WEIGHT = 6;
 function archetypesFor(ctx, run) {
   const A = ctx.opts.archetypes; if (!A || ctx.opts.mode !== 'limited') return [];
   const m = run.main; const out = [];
+  if (m.length === 3 && A[m]?.themes?.length) out.push(A[m]);   // the three-colour faction first (e.g. Mardu, Esper)
   for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) { const a = A[m[i] + m[j]]; if (a?.themes?.length) out.push(a); }
   return out;
 }
@@ -602,7 +603,7 @@ function explain(ctx, r, synWhy) {
   else if (cons.risk === 'High') w.push(`Colour risk is high: about ${Math.round((1 - cons.onCurve) * 100)}% of spells won't have their colours on curve.`);
   for (const s of r.manabase.shortfalls) w.push(`${s.color} has ${s.have} sources; ${s.want} recommended for its heaviest cost.`);
   r.warnings = w;
-  r.setArchetypes = (r.run.archetypes || []).map(a => ({ pair: a.pair, label: a.label, signposts: a.signposts.slice(0, 4), fits: r.cards.filter(x => x.onPlan).reduce((n, x) => n + x.count, 0) }));
+  r.setArchetypes = (r.run.archetypes || []).map(a => ({ pair: a.pair, name: a.name, label: a.label, signposts: a.signposts.slice(0, 4), fits: r.cards.filter(x => x.onPlan).reduce((n, x) => n + x.count, 0) }));
   r.combosIn = r.breakdown.combosIn;
   delete r.deck.splash;
 }

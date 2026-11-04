@@ -4,6 +4,25 @@ import { analyse, themeLabel, GOALS, THEMES } from './tags.js';
 const THEME_KEYS = new Set(Object.keys(THEMES));
 
 const PAIRS = ['WU', 'UB', 'BR', 'RG', 'WG', 'WB', 'UR', 'BG', 'WR', 'UG'];
+const TRIPLES = ['WUB', 'UBR', 'BRG', 'WRG', 'WUG', 'WBG', 'WUR', 'UBG', 'WBR', 'URG'];
+// Official names for colour combinations (guilds, shards, wedges)
+export const COMBO_NAME = {
+  WU: 'Azorius', UB: 'Dimir', BR: 'Rakdos', RG: 'Gruul', WG: 'Selesnya', WB: 'Orzhov', UR: 'Izzet', BG: 'Golgari', WR: 'Boros', UG: 'Simic',
+  WUB: 'Esper', UBR: 'Grixis', BRG: 'Jund', WRG: 'Naya', WUG: 'Bant', WBG: 'Abzan', WUR: 'Jeskai', UBG: 'Sultai', WBR: 'Mardu', URG: 'Temur',
+};
+// Set-specific faction names, where a set names its archetypes
+const SET_NAMES = {
+  STX: { WB: 'Silverquill', UR: 'Prismari', BG: 'Witherbloom', WR: 'Lorehold', UG: 'Quandrix' },
+  SOS: { WB: 'Silverquill', UR: 'Prismari', BG: 'Witherbloom', WR: 'Lorehold', UG: 'Quandrix' },
+  BLB: { WU: 'Birds', UB: 'Rats', BR: 'Lizards', RG: 'Raccoons', WG: 'Rabbits', WB: 'Bats', UR: 'Otters', BG: 'Squirrels', WR: 'Mice', UG: 'Frogs' },
+  SNC: { WUB: 'Obscura', UBR: 'Maestros', BRG: 'Riveteers', WRG: 'Cabaretti', WUG: 'Brokers' },
+  KTK: { WBG: 'Abzan Houses', WUR: 'Jeskai Way', UBG: 'Sultai Brood', WBR: 'Mardu Horde', URG: 'Temur Frontier' },
+  TDM: { WBG: 'Abzan Houses', WUR: 'Jeskai Way', UBG: 'Sultai Brood', WBR: 'Mardu Horde', URG: 'Temur Frontier' },
+};
+export function comboName(combo, codes) {
+  for (const c of codes || []) if (SET_NAMES[c]?.[combo]) return SET_NAMES[c][combo];
+  return COMBO_NAME[combo] || combo;
+}
 const PAIR_ORDER = (p) => 'WUBRG'.split('').filter(c => p.includes(c)).join('');
 // "gives" themes that every card of a type has; they only matter when something wants them
 const PASSIVE = new Set(['multicolor', 'legends', 'spells', 'artifacts', 'enchantments', 'flyers', 'bigmana', 'draw', 'vehicles', 'voltron', 'lessons']);
@@ -14,7 +33,7 @@ export function setArchetypes(db, codes) {
   const key = (codes || []).join(',');
   if (cache.has(key)) return cache.get(key);
   const out = {};
-  for (const pair of PAIRS) out[PAIR_ORDER(pair)] = { pair: PAIR_ORDER(pair), score: new Map(), signposts: [], cards: 0 };
+  for (const pair of [...PAIRS, ...TRIPLES]) out[PAIR_ORDER(pair)] = { pair: PAIR_ORDER(pair), score: new Map(), signposts: [], cards: 0 };
   // how common is each mechanic across the whole set (to tell set-wide mechanics from pair-specific ones)
   const setWide = new Map(); let setCount = 0;
   for (const code of codes || []) {
@@ -24,12 +43,12 @@ export function setArchetypes(db, codes) {
       c.tags ||= analyse(c);
       setCount++;
       for (const m of c.tags.mechanics) setWide.set(m, (setWide.get(m) || 0) + 1);
-      if (c.colors.length !== 2) continue;
+      if (c.colors.length !== 2 && c.colors.length !== 3) continue;
       const a = out[PAIR_ORDER(c.colors)]; if (!a) continue;
       const rar = st.rr?.[idx] || c.rarity[0];
       const w = rar === 'u' ? 2 : 1; // gold uncommons are the designed signposts
       a.cards++;
-      if (rar === 'u') a.signposts.push(c.name);
+      if (rar === 'u' || (c.colors.length === 3 && rar !== 'm')) a.signposts.push(c.name);
       const add = (k, v) => a.score.set(k, (a.score.get(k) || 0) + v * w);
       const norm = (k) => k === 'goal:lifegain' ? 'lifegain' : k === 'goal:counters' ? 'counters' : (k.startsWith('mech:') && THEME_KEYS.has(k.slice(5))) ? k.slice(5) : k;
       const seen = new Set();
@@ -42,7 +61,8 @@ export function setArchetypes(db, codes) {
       if (c.isCreature) for (const st of c.subtypes) (a.types ||= new Map()).set(st.toLowerCase(), ((a.types?.get(st.toLowerCase())) || 0) + w);
     }
   }
-  for (const k of Object.keys(out)) if (!out[k].cards) delete out[k];
+  // three-colour archetypes only count in sets that actually support them (several tri-colour cards in that combination)
+  for (const k of Object.keys(out)) if (!out[k].cards || (k.length === 3 && out[k].cards < 4)) delete out[k];
   for (const a of Object.values(out)) {
     // a mechanic on most of the set's cards isn't specific to one pair
     for (const [k] of a.score) if (k.startsWith('mech:') && (setWide.get(k.slice(5)) || 0) > setCount * 0.25) a.score.delete(k);
@@ -50,6 +70,7 @@ export function setArchetypes(db, codes) {
     if (a.types) { const top = [...a.types.entries()].sort((x, y) => y[1] - x[1])[0]; if (top && top[1] >= 3 && !['human', 'wizard', 'warrior', 'soldier', 'cleric', 'rogue', 'shaman', 'druid', 'citizen', 'advisor', 'scout'].includes(top[0])) a.score.set('typal:' + top[0], (a.score.get('typal:' + top[0]) || 0) + top[1] * 2); delete a.types; }
     const ranked = [...a.score.entries()].sort((x, y) => y[1] - x[1]).filter(([, v]) => v >= 3);
     a.themes = ranked.slice(0, 3).map(([k]) => k);
+    a.name = comboName(a.pair, codes);
     a.label = a.themes.length ? a.themes.map(archetypeThemeLabel).join(' · ') : 'Good-stuff (no clear theme)';
     delete a.score;
   }

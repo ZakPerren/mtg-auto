@@ -382,7 +382,7 @@ function archPanel(entries) {
   if (!rows.length) return '';
   return `<section class="card"><h2>Set archetypes <span class="muted">${sets.map(esc).join(' + ')}</span></h2>
     <p class="hint">Worked out from each colour pair's gold cards. Numbers = your pool's cards that fit the plan / playable in those colours. Tap a pair to lock those colours.</p>
-    ${rows.map(({ a, fit, playable }) => `<button class="archrow" data-arch="${a.pair}"><span class="pips">${[...a.pair].map(c => pip(c)).join('')}</span><span class="al">${esc(a.label)}<small>${a.signposts.slice(0, 3).map(n => esc(n.split(' // ')[0])).join(', ')}</small></span><b>${fit}/${playable}</b></button>`).join('')}</section>`;
+    ${rows.map(({ a, fit, playable }) => `<button class="archrow" data-arch="${a.pair}"><span class="pips">${[...a.pair].map(c => pip(c)).join('')}</span><span class="al"><b>${esc(a.name)}</b> — ${esc(a.label)}<small>${a.signposts.slice(0, 3).map(n => esc(n.split(' // ')[0])).join(', ')}</small></span><b>${fit}/${playable}</b></button>`).join('')}</section>`;
 }
 
 async function runBuild() {
@@ -437,7 +437,7 @@ function viewDeck(v) {
   <section class="card">
     <div class="opts">${out.results.slice(0, 8).map((x, i) => `<button data-res="${i}" class="${i === S.resultIdx ? 'on' : ''}"><span class="pips">${[...x.main].map(c => pip(c)).join('')}${x.splash ? '<span class="spl">+' + pip(x.splash) + '</span>' : ''}</span>${x.run.commander ? '<small>' + esc(x.run.commander.card.name.split(',')[0]) + '</small>' : ''}<small>${x.score}</small></button>`).join('')}</div>
     <h2>${[...r.main].map(c => pip(c)).join('')}${r.splash ? ' splash ' + pip(r.splash) : ''} ${esc(r.archetype)} ${r.run.commander ? '— ' + esc(r.run.commander.card.name) : ''}</h2>
-    ${(r.setArchetypes || []).map(a => `<div class="arch"><b>${[...a.pair].map(c => pip(c)).join('')} set archetype:</b> ${esc(a.label)} <small class="muted">— ${a.fits} of ${st.spells} spells on-plan (◆)${a.signposts.length ? ` · signposts: ${a.signposts.map(n => esc(n.split(' // ')[0])).join(', ')}` : ''}</small></div>`).join('')}
+    ${(r.setArchetypes || []).map(a => `<div class="arch"><b>${[...a.pair].map(c => pip(c)).join('')} ${esc(a.name)}:</b> ${esc(a.label)} <small class="muted">— ${a.fits} of ${st.spells} spells on-plan (◆)${a.signposts.length ? ` · signposts: ${a.signposts.map(n => esc(n.split(' // ')[0])).join(', ')}` : ''}</small></div>`).join('')}
 
     <div class="stats">
       <div><b>${st.creatures}</b><small>creatures</small></div><div><b>${st.nonCreatures}</b><small>other spells</small></div>
