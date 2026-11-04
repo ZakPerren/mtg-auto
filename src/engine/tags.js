@@ -40,6 +40,7 @@ export const THEMES = {
 };
 
 let KNOWN_TYPES = null;
+const EVERGREEN = new Set(['flying', 'trample', 'vigilance', 'haste', 'reach', 'deathtouch', 'lifelink', 'menace', 'first strike', 'double strike', 'defender', 'hexproof', 'indestructible', 'flash', 'ward', 'enchant', 'equip', 'protection', 'prowess', 'kicker', 'scry', 'mill', 'fight', 'cycling', 'choose one', 'choose two', 'etbreplacement', 'changeling']);
 const NOT_TYPAL = new Set(['creature', 'land', 'planeswalker', 'battle', 'kindred', 'tribal', 'card', 'token', 'permanent', 'spell', 'town', 'legendary', 'basic', 'snow']);
 export function setKnownTypes(set) { KNOWN_TYPES = set; }
 
@@ -103,6 +104,8 @@ export function analyse(c) {
   if (/whenever you gain life|if you('ve| have)? gained life|you gained life this turn|life total is greater than/.test(t)) wants.add('lifegain');
   // spells
   if (c.isInstantSorcery) gives.add('spells');
+  if (/spend this mana only to cast (an? )?instant (and|or) sorcery|instant and sorcery spells you cast cost/.test(t)) wants.add('spells');
+  if (/sacrifice (a|an|another|two|three) (creature |artifact )?tokens?/.test(t)) wants.add('tokens');
   if (/whenever you cast an? (instant|sorcery|noncreature)|instant and sorcery spells you cast|whenever you cast a noncreature|noncreature spells you cast|\bmagecraft\b|\bprowess\b|instant and sorcery cards in your graveyard/.test(t) || kw.has('prowess')) wants.add('spells');
   // artifacts
   if (c.types.includes('Artifact') || /create[^.]*(artifact|treasure|clue|food|blood|map|powerstone|gold|junk|incubator)[^.]*token/.test(t)) gives.add('artifacts');
@@ -191,10 +194,11 @@ export function analyse(c) {
   // Forge hints like Type$Elf
   for (const h of [...(c.hints?.hints || []), ...(c.hints?.needs || [])]) {
     const [k, v] = h.split(':'); if (k !== 'type' || !v) continue;
-    const lv = v.toLowerCase();
+    for (const lv of v.toLowerCase().split(/[,.]/).filter(Boolean)) {
     const TYPE_THEME = { artifact: 'artifacts', enchantment: 'enchantments', instant: 'spells', sorcery: 'spells', equipment: 'voltron', aura: 'voltron', legendary: 'legends', vehicle: 'vehicles', saga: 'enchantments', lesson: 'lessons', food: 'food', clue: 'clue', treasure: 'treasure', blood: 'blood' };
     if (TYPE_THEME[lv]) wants.add(TYPE_THEME[lv]);
     else if (!NOT_TYPAL.has(lv) && (KNOWN_TYPES ? KNOWN_TYPES.has(lv) : true)) typal.add(lv);
+    }
   }
   const isTypes = new Set([...c.subtypes, ...c.types].map(s => s.toLowerCase()));
   if ((c.keywords || []).some(k => /changeling/i.test(k)) || /\bchangeling\b/.test(t)) isTypes.add('*');
@@ -209,7 +213,11 @@ export function analyse(c) {
   if (gives.has('poison')) goals.add('poison');
   if (gives.has('counters')) goals.add('counters');
   if (roles.has('lifegain') && !c.isLand) goals.add('lifegain');
-  return { roles, gives, wants, typal, isTypes, goals };
+  // ability words ("repartee —", "landfall —") and non-evergreen keywords: used to recognise a set's archetype mechanics
+  const mechanics = new Set();
+  for (const m of (c.fullText || '').toLowerCase().matchAll(/(?:^|\n)([a-z][a-z' ]{2,24}) — /g)) mechanics.add(m[1].trim());
+  for (const k of c.keywords || []) { const kl = k.toLowerCase(); if (!EVERGREEN.has(kl)) mechanics.add(kl); }
+  return { roles, gives, wants, typal, isTypes, goals, mechanics };
 }
 
 const COMMON_WORDS = new Set(['creature', 'creatures', 'permanent', 'permanents', 'land', 'lands', 'artifact', 'artifacts', 'enchantment', 'enchantments', 'spell', 'spells', 'card', 'cards', 'token', 'tokens', 'nontoken', 'other', 'another', 'each', 'the', 'and', 'that', 'this', 'one', 'two', 'three', 'more', 'all', 'opponent', 'player', 'you', 'they', 'equipment', 'aura', 'auras', 'planeswalker', 'planeswalkers', 'instant', 'sorcery', 'legendary', 'noncreature', 'nonland', 'colorless', 'multicolored', 'white', 'blue', 'black', 'red', 'green', 'basic', 'untapped', 'tapped', 'attacking', 'blocking', 'mana', 'its', 'their', 'equipped', 'enchanted', 'commander', 'vehicle', 'vehicles', 'food', 'clue', 'treasure', 'blood', 'saga', 'snow', 'historic', 'outlaw', 'battle', 'party', 'gate', 'gates', 'shrine', 'shrines', 'dragon', 'dragons']

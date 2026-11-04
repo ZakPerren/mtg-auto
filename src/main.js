@@ -3,7 +3,8 @@ import { ls, idbGet, idbSet } from './data/store.js';
 import { parseList, resolveList } from './data/pool.js';
 import { openPacks, PACK_SIZE, MAX_RARE } from './data/packs.js';
 import * as SF from './data/scryfall.js';
-import { buildDecks, PRESETS } from './engine/builder.js';
+import { buildDecks, PRESETS, rescore } from './engine/builder.js';
+import { setArchetypes, fitsArchetype } from './engine/archetypes.js';
 import { analyse, ROLE_LABEL, themeLabel, GOALS } from './engine/tags.js';
 import { powerOf } from './engine/power.js';
 import { Rules } from './engine/rules.js';
@@ -311,6 +312,7 @@ function viewBuild(v) {
     <p class="hint">Tap: must include → exclude → either.</p>
     <div class="colorpick">${['W', 'U', 'B', 'R', 'G'].map(c => `<button data-color="${c}" class="cstate ${colorState(c)}">${pip(c)}<small>${({ must: 'must', no: 'no', '': 'any' })[colorState(c)]}</small></button>`).join('')}</div>
   </section>
+  ${archPanel(entries)}
   <section class="card">
     <h2>Must include</h2>
     <div id="mustChips" class="chips">${o.mustInclude.map(n => `<span class="chip">${esc(n)} <button data-rmmust="${esc(n)}">×</button></span>`).join('') || '<span class="muted">none</span>'}</div>
@@ -359,7 +361,28 @@ function viewBuild(v) {
   poolFilterAc('mustIn', 'mustList', 'mustInclude');
   poolFilterAc('exIn', 'exList', 'exclude');
   $('#resetOpts').onclick = () => { S.opts = { ...DEFAULT_OPTS }; save(); render(); };
+  $$('[data-arch]').forEach(b => b.onclick = () => { o.mustColors = b.dataset.arch; o.excludeColors = o.excludeColors.split('').filter(c => !b.dataset.arch.includes(c)).join(''); save(); render(); toast(`Colours set to ${b.dataset.arch} — tap Build`); });
   $('#go').onclick = runBuild;
+}
+
+function archPanel(entries) {
+  const sets = pool().sets;
+  if (S.opts.mode !== 'limited' || !sets.length) return '';
+  const A = setArchetypes(db, sets);
+  const rows = Object.values(A).filter(a => a.themes?.length).map(a => {
+    let fit = 0, playable = 0;
+    for (const e of entries) {
+      const c = e.card; if (c.isLand) continue;
+      const needs = [...(c.colors || '')];
+      if (!needs.every(x => a.pair.includes(x))) continue;
+      playable += e.count; if (fitsArchetype(c, a) > 0) fit += e.count;
+    }
+    return { a, fit, playable };
+  }).sort((x, y) => y.fit - x.fit);
+  if (!rows.length) return '';
+  return `<section class="card"><h2>Set archetypes <span class="muted">${sets.map(esc).join(' + ')}</span></h2>
+    <p class="hint">Worked out from each colour pair's gold cards. Numbers = your pool's cards that fit the plan / playable in those colours. Tap a pair to lock those colours.</p>
+    ${rows.map(({ a, fit, playable }) => `<button class="archrow" data-arch="${a.pair}"><span class="pips">${[...a.pair].map(c => pip(c)).join('')}</span><span class="al">${esc(a.label)}<small>${a.signposts.slice(0, 3).map(n => esc(n.split(' // ')[0])).join(', ')}</small></span><b>${fit}/${playable}</b></button>`).join('')}</section>`;
 }
 
 async function runBuild() {
@@ -369,6 +392,7 @@ async function runBuild() {
   prog.innerHTML = '<div class="spinner"></div> Analysing pool…';
   await new Promise(r => setTimeout(r, 30));
   const o = { ...S.opts, sets: pool().sets.length ? pool().sets : guessSets(entries) };
+  if (o.mode === 'limited' && o.sets.length) o.archetypes = setArchetypes(db, o.sets);
   let combos = combosInPool(entries.map(e => e.card), ls.get('customCombos', []).map(c => ({ ...c, source: 'yours' })));
   let comboNote = '';
   if (o.onlineCombos && navigator.onLine && entries.length <= 1500) {
@@ -387,7 +411,7 @@ async function runBuild() {
   out.ms = Math.round(performance.now() - t0);
   out.comboNote = comboNote; out.combosInPool = combos; out.opts = o;
   if (out.error || !out.results.length) { prog.innerHTML = `<p class="warn">${esc(out.error || 'No deck could be built with these restrictions — try allowing more colours or removing must-include cards.')}</p>`; return; }
-  S.result = out; S.resultIdx = 0;
+  S.result = out; S.resultIdx = 0; S.editing = false;
   location.hash = 'deck';
 }
 function guessSets(entries) {
@@ -409,17 +433,19 @@ function viewDeck(v) {
   const spells = r.cards.filter(x => !x.card.isCreature);
   const maxCurve = Math.max(...st.curve, 1);
   const basics = Object.entries(mb.basics).filter(([, n]) => n > 0);
-  v.innerHTML = `
+  v.innerHTML = `${S.editing ? editBar(r) : ''}
   <section class="card">
     <div class="opts">${out.results.slice(0, 8).map((x, i) => `<button data-res="${i}" class="${i === S.resultIdx ? 'on' : ''}"><span class="pips">${[...x.main].map(c => pip(c)).join('')}${x.splash ? '<span class="spl">+' + pip(x.splash) + '</span>' : ''}</span>${x.run.commander ? '<small>' + esc(x.run.commander.card.name.split(',')[0]) + '</small>' : ''}<small>${x.score}</small></button>`).join('')}</div>
     <h2>${[...r.main].map(c => pip(c)).join('')}${r.splash ? ' splash ' + pip(r.splash) : ''} ${esc(r.archetype)} ${r.run.commander ? '— ' + esc(r.run.commander.card.name) : ''}</h2>
+    ${(r.setArchetypes || []).map(a => `<div class="arch"><b>${[...a.pair].map(c => pip(c)).join('')} set archetype:</b> ${esc(a.label)} <small class="muted">— ${a.fits} of ${st.spells} spells on-plan (◆)${a.signposts.length ? ` · signposts: ${a.signposts.map(n => esc(n.split(' // ')[0])).join(', ')}` : ''}</small></div>`).join('')}
+
     <div class="stats">
       <div><b>${st.creatures}</b><small>creatures</small></div><div><b>${st.nonCreatures}</b><small>other spells</small></div>
       <div><b>${st.removal}</b><small>removal</small></div><div><b>${st.avgCmc}</b><small>avg MV</small></div><div><b>${r.L}</b><small>lands</small></div>
     </div>
     <div class="curve">${st.curve.slice(0, 8).map((n, i) => `<div class="bar"><span style="height:${(n / maxCurve) * 100}%"></span><b>${n || ''}</b><small>${i === 7 ? '7+' : i}</small></div>`).join('')}</div>
     ${r.warnings.length ? `<ul class="warnings">${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
-    <div class="row wrap"><button id="playtest" class="primary">▶ Playtest</button><button id="copyArena" class="primary">Copy for MTG Arena</button><button id="shareDeck" class="ghost">Share</button><button id="saveDeck" class="ghost">Save</button><button id="cacheImgs" class="ghost">Save images offline</button></div>
+    <div class="row wrap"><button id="editDeck" class="${S.editing ? 'primary' : 'ghost'}">${S.editing ? '✓ Done editing' : '✎ Edit deck'}</button><button id="playtest" class="primary">▶ Playtest</button><button id="copyArena" class="primary">Copy for MTG Arena</button><button id="shareDeck" class="ghost">Share</button><button id="saveDeck" class="ghost">Save</button><button id="cacheImgs" class="ghost">Save images offline</button></div>
   </section>
   <section class="card decklist">
     ${r.run.commander ? `<h3 class="grp">Commander</h3>${cardRow(r.run.commander.card)}` : ''}
@@ -428,8 +454,8 @@ function viewDeck(v) {
     <h3 class="grp">Spells <span class="muted">${spells.reduce((a, x) => a + x.count, 0)}</span></h3>
     ${spells.map(x => deckRow(x)).join('')}
     <h3 class="grp">Lands <span class="muted">${r.L}</span></h3>
-    ${mb.nonbasics.map(c => cardRow(c, { right: '<b>1</b>', sub: 'makes ' + (c.produces || '—') })).join('')}
-    ${basics.map(([c, n]) => `<div class="crow"><span class="cost">${pip(c)}</span><span class="cname">${BASIC_NAME[c]}</span><span class="right"><b>${n}</b></span></div>`).join('')}
+    ${mb.nonbasics.map((c, k) => cardRow(c, { right: S.editing ? `<button class="mini" data-outland="${k}">−</button><b>1</b>` : '<b>1</b>', sub: 'makes ' + (c.produces || '—') })).join('')}
+    ${(S.editing ? ['W', 'U', 'B', 'R', 'G'].map(c => [c, mb.basics[c] || 0]) : basics).map(([c, n]) => `<div class="crow"><span class="cost">${pip(c)}</span><span class="cname">${BASIC_NAME[c]}</span><span class="right">${S.editing ? `<button class="mini" data-basic="${c}" data-d="-1">−</button><b>${n}</b><button class="mini" data-basic="${c}" data-d="1">+</button>` : `<b>${n}</b>`}</span></div>`).join('')}
     <p class="hint">Sources: ${[...r.colors].map(c => `${pip(c)} ${mb.sources[c]}`).join(' · ')}${mb.fixingLands ? ` · ${mb.fixingLands} dual/fixing land${mb.fixingLands > 1 ? 's' : ''}` : ''}</p>
     ${mb.consistency ? `<div class="mana-risk risk-${mb.consistency.risk.toLowerCase()}"><b>Colour risk: ${mb.consistency.risk}</b> — ${Math.round(mb.consistency.onCurve * 100)}% of spells have their colours on curve, ${Math.round(mb.consistency.within2 * 100)}% within 2 turns.
       ${mb.consistency.worst.filter(x => x.pOn < 0.8).length ? `<br><small>Least reliable: ${mb.consistency.worst.filter(x => x.pOn < 0.8).slice(0, 3).map(x => `${esc(x.name.split(' // ')[0])} ${Math.round(x.pOn * 100)}% on turn ${x.turn}`).join(' · ')}</small>` : ''}</div>` : ''}
@@ -453,11 +479,25 @@ function viewDeck(v) {
     ${out.comboNote ? `<p class="hint">${esc(out.comboNote)}</p>` : ''}
   </section>
   <section class="card">
-    <h2>Best of the rest</h2>
-    ${r.sideboard.map(x => cardRow(x.card, { right: `<span class="val">${x.value}</span>`, sub: esc(x.reason) })).join('')}
+    <h2>${S.editing ? 'Sideboard — tap + to add' : 'Best of the rest'}</h2>
+    ${(S.editing ? r.sideboard : r.sideboard.slice(0, 15)).map(x => cardRow(x.card, { right: `<span class="val">${x.value}</span>${S.editing ? `<button class="mini add" data-in="${x.i}">+</button>` : ''}`, sub: esc(x.reason) + (x.left > 1 ? ` · ${x.left} left` : '') })).join('')}
+    ${S.editing ? spareLands(r).map(c => cardRow(c, { right: `<button class="mini add" data-inland="${esc(c.name)}">+</button>`, sub: 'land · makes ' + (c.produces || '—') })).join('') : ''}
     <p class="hint">Built in ${out.ms} ms from ${out.poolSize} cards. Card values: ${esc(scoreSourceNote(r))}</p>
   </section>`;
   $$('[data-res]').forEach(b => b.onclick = () => { S.resultIdx = +b.dataset.res; render(); });
+  $('#editDeck').onclick = () => { S.editing = !S.editing; render(); };
+  const edit = (fn) => {
+    r.orig ||= { score: r.score, list: [...r.deck.list], L: r.L };
+    fn(); rescore(r);
+    const y = v.scrollTop; render(); v.scrollTop = y;
+  };
+  const manual = () => (r.manual ||= { nonbasics: [...r.manabase.nonbasics], basics: { ...r.manabase.basics } });
+  $$('[data-out]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => { const k = r.deck.list.indexOf(+b.dataset.out); if (k >= 0) r.deck.list.splice(k, 1); }); });
+  $$('[data-in]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => r.deck.list.push(+b.dataset.in)); });
+  $$('[data-outland]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => manual().nonbasics.splice(+b.dataset.outland, 1)); });
+  $$('[data-inland]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => manual().nonbasics.push(r.ctx.lands.find(l => l.card.name === b.dataset.inland).card)); });
+  $$('[data-basic]', v).forEach(b => b.onclick = (e) => { e.stopPropagation(); edit(() => { const m = manual(); m.basics[b.dataset.basic] = Math.max(0, (m.basics[b.dataset.basic] || 0) + +b.dataset.d); }); });
+  if ($('#resetEdit')) $('#resetEdit').onclick = () => { if (!r.orig) return; r.deck.list = [...r.orig.list]; r.L = r.orig.L; delete r.manual; rescore(r); delete r.orig; render(); };
   const deckList = () => {
     const list = r.cards.map(x => ({ card: x.card, count: x.count }));
     const nb = new Map(); for (const c of r.manabase.nonbasics) nb.set(c, (nb.get(c) || 0) + 1);
@@ -484,7 +524,21 @@ function scoreSourceNote(r) {
 }
 function deckRow(x) {
   const roleIcons = x.roles.filter(r => ['Removal', 'Hard removal', 'Card advantage', 'Board wipe', 'Counterspell', 'Evasion', 'Finisher'].includes(r)).slice(0, 2);
-  return cardRow(x.card, { right: `${x.splash ? '<span class="tag spl">splash</span>' : ''}<span class="val" title="value">${x.value}</span><b>${x.count}</b>`, sub: roleIcons.join(' · ') });
+  return cardRow(x.card, { right: `${x.splash ? '<span class="tag spl">splash</span>' : ''}${x.onPlan ? '<span class="onplan" title="fits the set archetype">◆</span>' : ''}<span class="val" title="value">${x.value}</span>${S.editing ? `<button class="mini" data-out="${x.i}">−</button>` : ''}<b>${x.count}</b>`, sub: roleIcons.join(' · ') });
+}
+function editBar(r) {
+  const size = r.deck.list.length + r.L + (r.run.commander ? 1 : 0);
+  const target = S.result.opts.deckSize;
+  const delta = r.orig ? r.score - r.orig.score : 0;
+  return `<div class="editbar"><span><b class="${size === target ? '' : 'warn'}">${size}/${target}</b> cards · ${r.deck.list.length} spells + ${r.L} lands</span>
+    <span>Score <b>${r.score}</b>${r.orig ? ` <span class="${delta >= 0 ? 'ok' : 'warn'}">(${delta >= 0 ? '+' : ''}${delta} vs suggested)</span>` : ''}</span>
+    ${r.orig ? '<button id="resetEdit" class="ghost small">Reset to suggested</button>' : ''}</div>`;
+}
+function spareLands(r) {
+  const used = new Map(); for (const c of r.manabase.nonbasics) used.set(c.name, (used.get(c.name) || 0) + 1);
+  const out = [];
+  for (const e of r.ctx.lands) if (!e.card.isBasic && (used.get(e.card.name) || 0) < e.count) out.push(e.card);
+  return out;
 }
 function arenaText(r) {
   const lines = [];

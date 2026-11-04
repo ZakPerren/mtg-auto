@@ -3,6 +3,7 @@ import { WUBRG, sortColors, castableWith, pips } from './card.js';
 import { analyse, pairSynergy, themeLabel, linkText, ROLE_LABEL } from './tags.js';
 import { powerOf } from './power.js';
 import { consistency } from './mana.js';
+import { fitsArchetype } from './archetypes.js';
 
 export const PRESETS = {
   sealed: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, label: 'Sealed / Prerelease (40)' },
@@ -170,7 +171,7 @@ export function buildDecks(poolEntries, rawOpts, combos = [], onProgress) {
   }
   results.sort((a, b) => b.score - a.score);
   // explain
-  for (const r of results) explain(ctxBase, r, synWhy);
+  for (const r of results) { r.synWhy = synWhy; explain(r.ctx, r, synWhy); }
   return { results, poolSize: entries.reduce((a, e) => a + e.count, 0), ignored: entries.filter(e => e.illegal).map(e => e.card.name) };
 }
 
@@ -206,7 +207,12 @@ function estimate(ctx, run) {
   return s;
 }
 
-function optimise(ctx, run) {
+function optimise(ctx0, run) {
+  // set archetype guidance: cards that fit the archetype of the deck's colour pair(s) get a bonus
+  const archs = archetypesFor(ctx0, run);
+  const bonus = ctx0.spells.map(e => archs.reduce((b, a) => Math.max(b, fitsArchetype(e.card, a)), 0) * ARCH_WEIGHT * (ctx0.opts.synergyWeight ?? 1));
+  const ctx = { ...ctx0, values: ctx0.values.map((v, i) => v + bonus[i]) };
+  run.archetypes = archs; run.archBonus = bonus;
   const { opts, spells, syn, n, values, style } = ctx;
   const colors = sortColors(run.main + run.splash);
   const singleton = opts.singleton;
@@ -261,7 +267,15 @@ function optimise(ctx, run) {
   const manabase = buildManabase(ctx, run, deck, L);
   const sc = deckScore(ctx, run, deck, castPenalty);
   const total = sc.total + manabase.score;
-  return { run, colors, main: run.main, splash: run.splash, deck, L, manabase, breakdown: { ...sc, mana: manabase.score }, score: Math.round(total) };
+  return { run, colors, main: run.main, splash: run.splash, deck, L, manabase, breakdown: { ...sc, mana: manabase.score }, score: Math.round(total), ctx, castPenalty };
+}
+
+const ARCH_WEIGHT = 6;
+function archetypesFor(ctx, run) {
+  const A = ctx.opts.archetypes; if (!A || ctx.opts.mode !== 'limited') return [];
+  const m = run.main; const out = [];
+  for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) { const a = A[m[i] + m[j]]; if (a?.themes?.length) out.push(a); }
+  return out;
 }
 
 function cloneDeck(d) { return { list: [...d.list], synWith: Float32Array.from(d.synWith), used: Int16Array.from(d.used), splashCount: d.splashCount, splash: d.splash }; }
@@ -540,7 +554,7 @@ function explain(ctx, r, synWhy) {
   const inDeck = new Set(d.list);
   const counts = new Map(); for (const i of d.list) counts.set(i, (counts.get(i) || 0) + 1);
   r.cards = [...counts.entries()].map(([i, k]) => ({
-    card: spells[i].card, count: k, power: spells[i].power, powerSource: spells[i].powerSource, value: Math.round(values[i]),
+    i, card: spells[i].card, count: k, onPlan: (r.run.archBonus?.[i] || 0) > 0, power: spells[i].power, powerSource: spells[i].powerSource, value: Math.round(values[i]),
     synergy: Math.round(d.synWith[i] * 10) / 10, splash: !!d.splash?.[i],
     roles: [...spells[i].card.tags.roles].map(x => ROLE_LABEL[x] || x),
   })).sort((a, b) => a.card.cmc - b.card.cmc || b.value - a.value);
@@ -567,8 +581,8 @@ function explain(ctx, r, synWhy) {
   r.sideboard = spells.map((e, i) => ({ e, i })).filter(({ e, i }) => !inDeck.has(i) || d.used[i] < e.count)
     .map(({ e, i }) => {
       const ok = inColours(e.card, colors, opts).ok;
-      return { card: e.card, value: Math.round(values[i]), power: e.power, onColour: ok, reason: !ok ? `Off-colour (${e.card.colors || 'C'})` : d.used[i] > 0 ? 'Extra copy' : 'Cut for curve/synergy' };
-    }).sort((a, b) => b.value - a.value).slice(0, 15);
+      return { i, card: e.card, left: e.count - d.used[i], value: Math.round(values[i]), power: e.power, onColour: ok, reason: !ok ? `Off-colour (${e.card.colors || 'C'})` : d.used[i] > 0 ? 'Extra copy' : 'Cut for curve/synergy' };
+    }).sort((a, b) => b.value - a.value);
   // warnings
   const w = [...r.manabase.warnings];
   if (opts.mode === 'limited') {
@@ -582,6 +596,52 @@ function explain(ctx, r, synWhy) {
   else if (cons.risk === 'High') w.push(`Colour risk is high: about ${Math.round((1 - cons.onCurve) * 100)}% of spells won't have their colours on curve.`);
   for (const s of r.manabase.shortfalls) w.push(`${s.color} has ${s.have} sources; ${s.want} recommended for its heaviest cost.`);
   r.warnings = w;
+  r.setArchetypes = (r.run.archetypes || []).map(a => ({ pair: a.pair, label: a.label, signposts: a.signposts.slice(0, 4), fits: r.cards.filter(x => x.onPlan).reduce((n, x) => n + x.count, 0) }));
   r.combosIn = r.breakdown.combosIn;
   delete r.deck.splash;
+}
+
+
+// ---------------- manual editing ----------------
+// Re-score a result after the user edits it. r.deck.list holds spell indices; r.manual (optional) holds {nonbasics:[card], basics:{W..G}}.
+export function rescore(r) {
+  const ctx = r.ctx; const { spells } = ctx;
+  // colours actually needed by the edited deck
+  const need = { W: 0, U: 0, B: 0, R: 0, G: 0 }, heavy = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+  for (const i of r.deck.list) { const p = pips(spells[i].card.manaCost.split(' // ')[0]); for (const c of WUBRG) if (p[c]) { need[c]++; if (p[c] >= 2) heavy[c]++; } }
+  const used = WUBRG.filter(c => need[c] > 0);
+  let main = used.filter(c => need[c] > 3 || heavy[c] > 0);
+  let splash = used.filter(c => !main.includes(c));
+  if (splash.length > 1 || !main.length) { main = used; splash = []; }
+  const run = { ...r.run, main: main.join(''), splash: splash.join(''), cmdSyn: r.run.cmdSyn };
+  const colors = sortColors(run.main + run.splash);
+  const splashCard = new Uint8Array(ctx.n); const castPenalty = new Float32Array(ctx.n);
+  for (let i = 0; i < ctx.n; i++) {
+    const ok = inColours(spells[i].card, colors, ctx.opts); castPenalty[i] = ok.ok ? ok.penalty * 2 : 0;
+    if (run.splash && !inColours(spells[i].card, run.main, ctx.opts).ok) splashCard[i] = 1;
+  }
+  const deck = { list: [], synWith: new Float32Array(ctx.n), used: new Int16Array(ctx.n), splashCount: 0 };
+  for (const i of r.deck.list) addCard(ctx, run, deck, i, splashCard);
+  const mb = r.manual ? manualManabase(ctx, run, deck, r.manual) : buildManabase(ctx, run, deck, r.L);
+  const sc = deckScore(ctx, run, deck, castPenalty);
+  Object.assign(r, { run, colors, main: run.main, splash: run.splash, deck, manabase: mb, L: mb.L, breakdown: { ...sc, mana: mb.score }, score: Math.round(sc.total + mb.score), castPenalty });
+  explain(ctx, r, r.synWhy);
+  return r;
+}
+
+function manualManabase(ctx, run, deck, manual) {
+  const colors = sortColors(run.main + run.splash);
+  const sources = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+  for (const c of manual.nonbasics) for (const x of c.produces || '') if (sources[x] != null) sources[x]++;
+  for (const x of WUBRG) sources[x] += manual.basics[x] || 0;
+  const counts = new Map(); for (const i of deck.list) counts.set(i, (counts.get(i) || 0) + 1);
+  const deckSpells = [...counts].map(([i, count]) => { ctx.spells[i].card.__value = ctx.values[i]; return { card: ctx.spells[i].card, count }; });
+  const total = deck.list.length + manual.nonbasics.length + WUBRG.reduce((a, x) => a + (manual.basics[x] || 0), 0);
+  const cons = consistency(deckSpells, sources, Math.max(total, 1));
+  const fixingLands = manual.nonbasics.filter(c => [...(c.produces || '')].filter(x => colors.includes(x)).length >= 2).length;
+  const L = manual.nonbasics.length + WUBRG.reduce((a, x) => a + (manual.basics[x] || 0), 0);
+  const shortfalls = [];
+  const warnings = [];
+  for (const x of colors) if (!sources[x]) warnings.push(`No ${x} sources at all for your ${x} cards.`);
+  return { nonbasics: [...manual.nonbasics], basics: { ...manual.basics }, sources, score: -cons.loss, shortfalls, warnings, L, consistency: cons, fixingLands };
 }

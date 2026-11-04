@@ -217,3 +217,13 @@ body.pt-open { overflow: hidden; }
 .mana-risk.risk-medium { border-left-color: var(--accent); }
 .mana-risk.risk-high { border-left-color: var(--danger); }
 .mana-risk small { color: var(--muted); }
+
+.arch { font-size: 13px; background: var(--panel2); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
+.onplan { color: var(--accent2); font-size: 12px; }
+.editbar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; background: #2a2418; border: 1px solid var(--accent); border-radius: 10px; padding: 8px 10px; margin: 8px 0; font-size: 14px; position: sticky; top: 0; z-index: 3; }
+.editbar .ok { color: var(--ok); } .editbar .warn { color: var(--danger); }
+button.mini { min-height: 32px; min-width: 32px; padding: 0 6px; font-size: 18px; line-height: 1; border-radius: 8px; }
+button.mini.add { color: var(--ok); border-color: #3d6b4b; }
+.archrow { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; width: 100%; text-align: left; margin: 4px 0; }
+.archrow small { display: block; color: var(--muted); font-size: 12px; }
+#view > .editbar { max-width: 980px; margin: 0 auto 10px; }
