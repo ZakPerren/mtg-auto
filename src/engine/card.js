@@ -111,6 +111,14 @@ function finish(c) {
   // A deck may contain any number of …
   c.anyNumber = /a deck can have any number of cards named/i.test(allText) || c.isBasic;
   c.canBeCommander = (c.isLegendary && (c.isCreature || /vehicle|spacecraft/i.test(c.typeLine))) || /can be your commander/i.test(allText);
+  // Fixing that isn't a land: landcycling and spells/abilities that fetch basic lands
+  const BT = { plains: 'W', island: 'U', swamp: 'B', mountain: 'R', forest: 'G' };
+  c.landcycle = '';
+  if (/basic landcycling|\blandcycling/.test(t)) c.landcycle = 'WUBRG';
+  for (const [k, v] of Object.entries(BT)) if (new RegExp(`\\b${k}cycling`).test(t)) c.landcycle += v;
+  c.fetchBasic = '';
+  if (!c.isLand && /search your library for (a|up to (one|two)) basic land cards?/.test(t)) c.fetchBasic = 'WUBRG';
+  else if (!c.isLand) { const fm = t.match(/search your library for an? (plains|island|swamp|mountain|forest)( or (plains|island|swamp|mountain|forest))* card/); if (fm) for (const [k, v] of Object.entries(BT)) if (fm[0].includes(k)) c.fetchBasic += v; }
   c.produces = c.isLand || /\badd \{|add (one|two|three) mana|mana of any/i.test(t) ? manaProduced(c) : '';
   return c;
 }

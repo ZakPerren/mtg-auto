@@ -211,7 +211,10 @@ function optimise(ctx0, run) {
   // set archetype guidance: cards that fit the archetype of the deck's colour pair(s) get a bonus
   const archs = archetypesFor(ctx0, run);
   const bonus = ctx0.spells.map(e => archs.reduce((b, a) => Math.max(b, fitsArchetype(e.card, a)), 0) * ARCH_WEIGHT * (ctx0.opts.synergyWeight ?? 1));
-  const ctx = { ...ctx0, values: ctx0.values.map((v, i) => v + bonus[i]) };
+  // fixing (landcycling, basic-land fetchers) is worth more the more colours you're in
+  const nCol = run.main.length + (run.splash ? 1 : 0);
+  const fixW = nCol >= 4 ? 8 : nCol === 3 ? 5 : 0;
+  const ctx = { ...ctx0, values: ctx0.values.map((v, i) => v + bonus[i] + ((ctx0.spells[i].card.landcycle || ctx0.spells[i].card.fetchBasic) ? fixW : 0)) };
   run.archetypes = archs; run.archBonus = bonus;
   const { opts, spells, syn, n, values, style } = ctx;
   const colors = sortColors(run.main + run.splash);
@@ -277,6 +280,21 @@ function archetypesFor(ctx, run) {
   if (m.length === 3 && A[m]?.themes?.length) out.push(A[m]);   // the three-colour faction first (e.g. Mardu, Esper)
   for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) { const a = A[m[i] + m[j]]; if (a?.themes?.length) out.push(a); }
   return out;
+}
+
+// Landcyclers and basic-land fetchers aren't lands, but they find the colour you need: count each as part of a source
+// (typecycling 0.6 of its colour; basic landcycling / "search for a basic land" 0.4 of each deck colour).
+function effectiveSources(sources, deckSpells, nonbasics, colors) {
+  const out = { ...sources }; const fixers = [];
+  const add = (card, count, from) => {
+    const cols = [...from].filter(x => colors.includes(x)); if (!cols.length) return;
+    const each = from.length >= 5 ? 0.4 : 0.6;
+    for (const x of cols) out[x] += each * count;
+    fixers.push({ name: card.name, count });
+  };
+  for (const { card, count } of deckSpells) { if (card.landcycle) add(card, count, card.landcycle); else if (card.fetchBasic) add(card, count, card.fetchBasic); }
+  for (const c of nonbasics) if (c.landcycle) add(c, 1, c.landcycle);
+  return { sources: out, fixers };
 }
 
 function cloneDeck(d) { return { list: [...d.list], synWith: Float32Array.from(d.synWith), used: Int16Array.from(d.used), splashCount: d.splashCount, splash: d.splash }; }
@@ -479,7 +497,7 @@ function buildManabase(ctx, run, deck, L) {
     // only lands whose coloured mana is all useful: a U/B dual in a W/B/R deck is just a worse Swamp, so skip it.
     // Lands that make any colour (or fetch any basic) are fine — they'll only ever be used for your colours.
     const coloured = [...prod].filter(x => x !== 'C');
-    const anyColour = new Set(coloured).size >= 5;
+    const anyColour = new Set(coloured).size >= 5 || c.landcycle.length >= 5;
     if (opts.mode !== 'commander' && /commander's colou?r identity/.test(c.text)) continue; // e.g. Command Tower does nothing outside Commander
     if (!anyColour && coloured.some(x => !colors.includes(x))) continue;
     if (opts.mode === 'commander' && ![...c.identity].every(x => colors.includes(x))) continue;
@@ -539,7 +557,8 @@ function buildManabase(ctx, run, deck, L) {
   // This is a cost, not a ban: 3-5 colour decks still compete, they just pay for the real risk of colour screw.
   const counts = new Map(); for (const i of deck.list) counts.set(i, (counts.get(i) || 0) + 1);
   const deckSpells = [...counts].map(([i, count]) => { spells[i].card.__value = ctx.values[i]; return { card: spells[i].card, count }; });
-  const cons = consistency(deckSpells, sources, opts.deckSize);
+  const eff = effectiveSources(sources, deckSpells, chosen, colors);
+  const cons = consistency(deckSpells, eff.sources, opts.deckSize);
   const scale = deck.list.length / 23;
   // expected value lost to colour screw: each card's value × chance it's stuck on curve (light) or still stuck 2 turns later (heavy)
   let score = -cons.loss;
@@ -551,7 +570,7 @@ function buildManabase(ctx, run, deck, L) {
   }
   const totalLands = chosen.length + WUBRG.reduce((a, x) => a + basics[x], 0);
   if (totalLands < L) warnings.push(`Only ${totalLands} lands available — deck is ${L - totalLands} short.`);
-  return { nonbasics: chosen, basics, sources, demand, score, shortfalls, warnings, L, consistency: cons, fixingLands };
+  return { nonbasics: chosen, basics, sources, demand, score, shortfalls, warnings, L, consistency: cons, fixingLands, extraFixers: eff.fixers };
 }
 
 // ---------------- explanation ----------------
@@ -644,11 +663,12 @@ function manualManabase(ctx, run, deck, manual) {
   const counts = new Map(); for (const i of deck.list) counts.set(i, (counts.get(i) || 0) + 1);
   const deckSpells = [...counts].map(([i, count]) => { ctx.spells[i].card.__value = ctx.values[i]; return { card: ctx.spells[i].card, count }; });
   const total = deck.list.length + manual.nonbasics.length + WUBRG.reduce((a, x) => a + (manual.basics[x] || 0), 0);
-  const cons = consistency(deckSpells, sources, Math.max(total, 1));
+  const eff = effectiveSources(sources, deckSpells, manual.nonbasics, colors);
+  const cons = consistency(deckSpells, eff.sources, Math.max(total, 1));
   const fixingLands = manual.nonbasics.filter(c => [...(c.produces || '')].filter(x => colors.includes(x)).length >= 2).length;
   const L = manual.nonbasics.length + WUBRG.reduce((a, x) => a + (manual.basics[x] || 0), 0);
   const shortfalls = [];
   const warnings = [];
   for (const x of colors) if (!sources[x]) warnings.push(`No ${x} sources at all for your ${x} cards.`);
-  return { nonbasics: [...manual.nonbasics], basics: { ...manual.basics }, sources, score: -cons.loss, shortfalls, warnings, L, consistency: cons, fixingLands };
+  return { nonbasics: [...manual.nonbasics], basics: { ...manual.basics }, sources, score: -cons.loss, shortfalls, warnings, L, consistency: cons, fixingLands, extraFixers: eff.fixers };
 }

@@ -72,7 +72,7 @@ export function analyse(c) {
   else if (/(you )?draw a card/.test(t)) roles.add('cantrip');
   if (/exile the top (card|two cards|three cards|x cards)[^.]*\. (until|you may play|you may cast)/.test(t) || /look at the top (two|three|four|five|six|seven|x) cards[^.]*\.? ?put (two|three|up to two|any number)/.test(t)) roles.add('draw');
   if (!c.isLand && (/\{t\}: add|add (one|two|three) mana|add \{[wubrgc]\}|create (a|two|three|x) treasure|search your library for (a|up to two) basic land|put (a|up to one|up to two) (basic )?land cards? [^.]*onto the battlefield|you may play an additional land/.test(t))) roles.add('ramp');
-  if ((c.produces || '').replace('C', '').length >= 2) roles.add('fixing');
+  if ((c.produces || '').replace('C', '').length >= 2 || c.landcycle || c.fetchBasic) roles.add('fixing');
   if (/search your library for an? (card|creature card|instant|sorcery|artifact card|enchantment card|legendary)/.test(t) && !/basic land/.test(t)) roles.add('tutor');
   if (['flying', 'menace', 'trample', 'shadow', 'fear', 'intimidate', 'skulk', 'horsemanship'].some(k => kw.has(k)) || /~ can't be blocked|can't be blocked except/.test(t)) roles.add('evasion');
   if (c.types.includes('Instant') && /target creature[^.]*gets \+\d+\/\+\d+|target creature[^.]*gains (indestructible|hexproof|first strike|double strike|protection)/.test(t)) roles.add('trick');

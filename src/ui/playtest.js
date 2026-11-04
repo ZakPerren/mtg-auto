@@ -117,6 +117,7 @@ function render() {
     <div class="pt-row lands">${lands.map(o => cardFace(o, 'small')).join('')}</div>
   </div>
   <div class="pt-piles">
+    <button data-a="library">Library <b>${G.library.length}</b></button>
     <button data-a="zone" data-z="graveyard">Graveyard <b>${G.graveyard.length}</b></button>
     <button data-a="zone" data-z="exile">Exile <b>${G.exile.length}</b></button>
     <button data-a="draw">Draw</button>
@@ -146,6 +147,7 @@ function onClick(e) {
     if (act === 'opp-') { G.opp--; return render(); }
     if (act === 'opp+') { G.opp++; return render(); }
     if (act === 'zone') return showZone(a.dataset.z);
+    if (act === 'library') return showLibrary();
     if (act === 'token') return makeToken();
     return;
   }
@@ -206,6 +208,54 @@ function showZone(z) {
     if (e.target === m) m.remove();
   };
 }
+// Library: search it (tutors, fetches, landcycling), look at the top N (scry/surveil), mill, shuffle
+function showLibrary(mode = 'search', n = 3, q = '') {
+  const m = sheet('');
+  const draw = () => {
+    const lib = G.library;
+    let list;
+    if (mode === 'top') list = lib.slice(0, n).map((o, i) => ({ o, pos: i + 1 }));
+    else {
+      const f = q.toLowerCase();
+      list = lib.map((o, i) => ({ o, pos: i + 1 })).filter(x => !f || x.o.card.name.toLowerCase().includes(f) || x.o.card.typeLine.toLowerCase().includes(f))
+        .sort((a, b) => a.o.card.name.localeCompare(b.o.card.name));
+    }
+    m.querySelector('.pt-menu').innerHTML = `
+      <h3>Library (${lib.length})</h3>
+      <div class="row wrap lib-tools">
+        <button data-l="search" class="${mode === 'search' ? 'on' : ''}">Search</button>
+        <button data-l="top" data-n="1">Top 1</button><button data-l="top" data-n="3">Top 3</button><button data-l="top" data-n="5">Top 5</button>
+        <button data-l="mill">Mill 1</button><button data-l="shuffle">Shuffle</button>
+      </div>
+      ${mode === 'search' ? `<input id="libQ" type="search" placeholder="Filter by name or type (e.g. forest, land, dragon)" value="${esc(q)}">` : `<p class="hint">Top ${n} in order — first is the top card.</p>`}
+      <div class="lib-list">${list.map(({ o, pos }) => `<div class="lib-row" data-id="${o.id}">${cardFace(o, 'small')}<div class="lib-name"><b>${esc(o.card.name.split(' // ')[0])}</b><small>${esc(o.card.typeLine)}${mode === 'top' ? ` · #${pos}` : ''}</small>
+        <div class="lib-acts"><button data-to="hand">Hand</button><button data-to="battlefield">Play</button><button data-to="graveyard">Grave</button><button data-to="exile">Exile</button><button data-to="top">Top</button><button data-to="bottom">Bottom</button></div></div></div>`).join('') || '<p class="muted">No cards match.</p>'}</div>
+      <button class="ghost pt-cancel" data-l="close">Done</button>`;
+    const qi = m.querySelector('#libQ');
+    if (qi) { qi.oninput = () => { q = qi.value; const pos = qi.selectionStart; draw(); const n2 = m.querySelector('#libQ'); n2.focus(); n2.setSelectionRange(pos, pos); }; }
+  };
+  m.onclick = (e) => {
+    if (e.target === m) { m.remove(); render(); return; }
+    const t = e.target.closest('[data-to]');
+    if (t) {
+      const id = +t.closest('.lib-row').dataset.id; const to = t.dataset.to;
+      if (to === 'top') { move(id, 'library', { top: true }); }
+      else if (to === 'bottom') { move(id, 'library'); }
+      else move(id, to);
+      draw(); render(); m.parentNode || root.appendChild(m); return;
+    }
+    const l = e.target.closest('[data-l]'); if (!l) return;
+    const k = l.dataset.l;
+    if (k === 'close') { m.remove(); render(); return; }
+    if (k === 'search') { mode = 'search'; }
+    if (k === 'top') { mode = 'top'; n = +l.dataset.n; }
+    if (k === 'mill') { const o = G.library[0]; if (o) move(o.id, 'graveyard'); }
+    if (k === 'shuffle') { shuffle(G.library); }
+    draw(); render(); if (!m.parentNode) root.appendChild(m);
+  };
+  draw();
+}
+
 function makeToken() {
   const m = sheet(`<h3>Create token</h3><div class="row"><input id="tkName" placeholder="Name e.g. Soldier" value="Token"><input id="tkPT" placeholder="P/T" value="1/1" class="short"></div><div class="row"><label class="inline">How many <input id="tkN" type="number" value="1" min="1" max="20" class="tiny"></label><button class="primary" id="tkGo">Create</button></div>`);
   m.querySelector('#tkGo').onclick = () => {

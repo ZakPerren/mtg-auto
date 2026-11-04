@@ -33,10 +33,15 @@ function requirement(card, sources) {
   return best?.need || {};
 }
 
+// Fractional sources (landcyclers/fetchers count as part of a source): interpolate between whole numbers
+function atLeastFrac(N, S, n, k) {
+  const lo = Math.floor(S), f = S - lo;
+  return f ? atLeast(N, lo, n, k) * (1 - f) + atLeast(N, lo + 1, n, k) * f : atLeast(N, lo, n, k);
+}
 // P(all coloured requirements met after seeing n cards). Colours are treated as independent (a slight approximation).
 function castProb(need, sources, N, n) {
   let p = 1;
-  for (const [c, k] of Object.entries(need)) if (k > 0) p *= atLeast(N, sources[c] || 0, n, k);
+  for (const [c, k] of Object.entries(need)) if (k > 0) p *= atLeastFrac(N, sources[c] || 0, n, k);
   return p;
 }
 
