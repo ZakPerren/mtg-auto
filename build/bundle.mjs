@@ -19,6 +19,8 @@ copy('node_modules/mana-font/css/mana.min.css', 'vendor/mana.min.css');
 for (const f of ['mana.woff2', 'mana.woff', 'mana.ttf']) copy(`node_modules/mana-font/fonts/${f}`, `fonts/${f}`);
 for (const f of fs.readdirSync(path.join(ROOT, 'public/icons'))) copy(`public/icons/${f}`, `icons/${f}`);
 copy('public/manifest.webmanifest', 'manifest.webmanifest');
+copy('public/robots.txt', 'robots.txt');
+fs.writeFileSync(path.join(DIST, '.nojekyll'), '');
 
 // version = hash of everything that matters
 const h = crypto.createHash('sha1');
