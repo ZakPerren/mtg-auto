@@ -50,7 +50,14 @@ const poolTotal = () => pool().items.reduce((a, x) => a + x.count, 0);
 async function boot() {
   const status = $('#status');
   try {
-    try { if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {}); } catch { /* not allowed here */ }
+    try {
+      if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+        // when a new version (app or card data) has downloaded, switch to it straight away; your place is restored after the reload
+        const hadController = !!navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !window.__reloading) { window.__reloading = true; toast('Updated — reloading…'); setTimeout(() => location.reload(), 600); } });
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      }
+    } catch { /* not allowed here */ }
     await db.load(fetchJson, (m) => { status.textContent = m; });
     const override = await idbGet('rules-override').catch(() => null);
     rules = new Rules(override || await fetchJson('data/rules.json'));
@@ -182,9 +189,13 @@ function poolSearchInput(box) {
   let items = [];
   const show = () => {
     items = db.search(inp.value, { sets: p.sets.length ? p.sets : null, limit: 8 });
-    lst.innerHTML = items.map((c, i) => `<button class="acitem ${i === 0 ? 'top' : ''}" data-i="${i}"><span class="cost">${manaHtml(c.manaCost)}</span><span class="cname"><span class="rar r-${rarityLetter(db.rarityIn(c, p.sets))}"></span>${esc(c.name)}<small>${esc(c.typeLine)}</small></span><span class="badge">${countInPool(c) || ''}</span></button>`).join('');
+    const note = !inp.value.trim() ? '' : !items.length
+      ? `<p class="hint warn">No card found${p.sets.length ? ` in ${p.sets.join(', ')} or any other set` : ''}. Check the spelling — or if it's a brand-new set, go to Data → "Get a set from Scryfall" while online.</p>`
+      : items[0].outside ? `<p class="hint">Not in ${p.sets.join(', ')} — showing matches from other sets.${p.sets.length ? ' If this card is in your set, its list may be incomplete: Data → "Get a set from Scryfall".' : ''}</p>`
+      : items[0].fuzzy ? '<p class="hint">No exact match — closest names:</p>' : '';
+    lst.innerHTML = note + items.map((c, i) => `<button class="acitem ${i === 0 ? 'top' : ''}" data-i="${i}"><span class="cost">${manaHtml(c.manaCost)}</span><span class="cname"><span class="rar r-${rarityLetter(db.rarityIn(c, p.sets))}"></span>${esc(c.name)}<small>${esc(c.typeLine)}${c.outside ? ' · ' + esc((c.sets || []).slice(0, 2).join(', ')) : ''}</small></span><span class="badge">${countInPool(c) || ''}</span></button>`).join('');
   };
-  const add = (c) => { addToPool(c, 1); toast(`+1 ${c.name} (${countInPool(c)})`, 1400); inp.value = ''; lst.innerHTML = ''; inp.focus(); renderPoolList(); };
+  const add = (c) => { c = db.get(c.name) || c; addToPool(c, 1); toast(`+1 ${c.name} (${countInPool(c)})`, 1400); inp.value = ''; lst.innerHTML = ''; inp.focus(); renderPoolList(); };
   inp.addEventListener('input', debounce(show, 60));
   inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && items[0]) { e.preventDefault(); add(items[0]); } });
   lst.addEventListener('click', (e) => { const b = e.target.closest('.acitem'); if (b) add(items[+b.dataset.i]); });

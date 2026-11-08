@@ -3,6 +3,9 @@ import { fromBundle, normName } from '../engine/card.js';
 import { setKnownTypes } from '../engine/tags.js';
 import { idbGet } from './store.js';
 
+// Lower-case, accent-free, punctuation-free key for name search
+export function searchKey(s) { return normName(s).replace(/[-/]+/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim(); }
+
 export class CardDB {
   constructor() { this.records = []; this.cards = []; this.byKey = new Map(); this.sets = {}; this.meta = {}; }
 
@@ -56,7 +59,7 @@ export class CardDB {
     const types = new Set();
     for (const r of this.records) if (r.ty?.includes('Creature') || r.ty?.includes('Kindred')) for (const st of r.st || []) types.add(st.toLowerCase());
     setKnownTypes(types);
-    this.searchIndex = this.cards.map(c => normName(c.name));
+    this.searchIndex = this.cards.map(c => searchKey(c.name));
   }
 
   get(name) { return this.byKey.get(normName(name)) || null; }
@@ -80,12 +83,21 @@ export class CardDB {
     return card.rarity;
   }
 
-  // Autocomplete: prefix matches first, then word-prefix, then substring. Optional set restriction.
+  // Autocomplete: prefix, word-prefix, substring, then typo-tolerant matches. Punctuation is ignored ("ajanis" finds "Ajani's").
+  // With a set restriction, falls back to every set (results flagged .outside) when the set has no match.
   search(q, { sets = null, limit = 12, filter = null } = {}) {
-    const query = normName(q || '');
+    const query = searchKey(q || '');
     if (!query) return [];
-    const allowed = sets ? this.cardsInSets(sets) : null;
-    const pre = [], word = [], sub = [];
+    if (sets) {
+      const inSet = this._search(query, this.cardsInSets(sets), limit, filter);
+      if (inSet.length) return inSet;
+      return this._search(query, null, limit, filter).map(c => Object.assign(Object.create(c), { outside: true }));
+    }
+    return this._search(query, null, limit, filter);
+  }
+  _search(query, allowed, limit, filter) {
+    const pre = [], word = [], sub = [], anyOrder = [];
+    const qWords = query.split(' ').filter(Boolean);
     const pool = allowed ? [...allowed] : this.cards.map((_, i) => i);
     for (const i of pool) {
       const nm = this.searchIndex[i];
@@ -94,10 +106,25 @@ export class CardDB {
       if (nm.startsWith(query)) pre.push(c);
       else if (nm.includes(' ' + query) || nm.includes('-' + query)) word.push(c);
       else if (query.length >= 3 && nm.includes(query)) sub.push(c);
+      else if (qWords.length > 1 && qWords.every(w => nm.split(' ').some(x => x.startsWith(w)))) anyOrder.push(c);
       if (pre.length >= limit) break;
     }
     const byLen = (a, b) => a.name.length - b.name.length;
-    return [...pre.sort(byLen), ...word.sort(byLen), ...sub.sort(byLen)].slice(0, limit);
+    const out = [...pre.sort(byLen), ...word.sort(byLen), ...sub.sort(byLen), ...anyOrder.sort(byLen)].slice(0, limit);
+    if (out.length || query.length < 4) return out;
+    // nothing matched: typo-tolerant pass (letter-pair similarity against the start of each name)
+    const grams = (s) => { const g = new Map(); for (let i = 0; i < s.length - 1; i++) { const k = s.slice(i, i + 2); g.set(k, (g.get(k) || 0) + 1); } return g; };
+    const qg = grams(query); const qn = Math.max(1, query.length - 1);
+    const scored = [];
+    for (const i of pool) {
+      const c = this.cards[i]; if (filter && !filter(c)) continue;
+      const nm = this.searchIndex[i].slice(0, query.length + 2);
+      const ng = grams(nm); let hit = 0;
+      for (const [k, v] of qg) hit += Math.min(v, ng.get(k) || 0);
+      const sim = (2 * hit) / (qn + Math.max(1, nm.length - 1));
+      if (sim >= 0.6) scored.push([sim, c]);
+    }
+    return scored.sort((a, b) => b[0] - a[0]).slice(0, limit).map(x => Object.assign(Object.create(x[1]), { fuzzy: true }));
   }
 
   // Full-text card search used by the card browser: supports t:, o:, c:, s:, r:, mv<=, name text
@@ -125,7 +152,7 @@ export class CardDB {
           case 'f': case 'format': fn = c => c.legal.some(l => l.replace('*', '') === v); break;
           default: fn = c => c.name.toLowerCase().includes(term.toLowerCase());
         }
-      } else { const v = normName(term.replace(/^"|"$/g, '')); fn = c => normName(c.name).includes(v); }
+      } else { const v = searchKey(term.replace(/^"|"$/g, '')); fn = c => searchKey(c.name).includes(v); }
       tests.push(neg ? (c => !fn(c)) : fn);
     }
     const allowed = setFilter ? this.cardsInSets(setFilter) : null;
