@@ -1,5 +1,5 @@
 // Offline-first service worker. App shell + card/rules data are precached; everything is served cache-first.
-const VERSION = '902ca259e2';
+const VERSION = '97a32ecad7';
 const CACHE = 'mtg-auto-' + VERSION;
 const PRECACHE = ["./","index.html","app.js","app.css","data/cards.json","data/rules.json","vendor/mana.min.css","fonts/mana.woff2","fonts/mana.woff","fonts/mana.ttf","manifest.webmanifest","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png"];
 
