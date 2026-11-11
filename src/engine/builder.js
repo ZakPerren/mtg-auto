@@ -126,7 +126,26 @@ export function buildDecks(poolEntries, rawOpts, combos = [], onProgress) {
   const entries = prepareCards(poolEntries, opts).filter(e => !opts.excludeSet.has(e.card.key));
   if (opts.legality) for (const e of entries) e.illegal = !e.card.isBasic && !e.card.legal.some(l => l.replace('*', '') === opts.legality);
   const usable = entries.filter(e => !e.illegal);
-  const spells = usable.filter(e => !e.card.isLand);
+  let spells = usable.filter(e => !e.card.isLand);
+  // Big pools (e.g. a whole Arena collection): keep the strongest cards per colour plus the most synergy-hungry ones,
+  // so the synergy maths stays fast on a phone. Must-includes are always kept.
+  let pruned = 0;
+  const MAX_PER_GROUP = 150, MAX_SYNERGY = 150;
+  if (spells.length > 7 * MAX_PER_GROUP) {
+    const banned = opts.excludeColors || '';
+    const val = (e) => e.power + styleAdjust(e.card, style);
+    const keep = new Set(spells.filter(e => opts.mustSet.has(e.card.key)));
+    const groups = new Map();
+    for (const e of spells) {
+      if ([...banned].some(c => e.card.colors.includes(c))) continue;
+      const g = e.card.colors.length > 1 ? 'M' : (e.card.colors || 'C');
+      if (!groups.has(g)) groups.set(g, []); groups.get(g).push(e);
+    }
+    for (const list of groups.values()) list.sort((a, b) => val(b) - val(a)).slice(0, MAX_PER_GROUP).forEach(e => keep.add(e));
+    spells.filter(e => !keep.has(e) && (e.card.tags.wants.size || e.card.tags.typal.size)).sort((a, b) => val(b) - val(a)).slice(0, MAX_SYNERGY).forEach(e => keep.add(e));
+    pruned = spells.length - keep.size;
+    spells = spells.filter(e => keep.has(e));
+  }
   const lands = usable.filter(e => e.card.isLand);
   const n = spells.length;
 
@@ -172,7 +191,7 @@ export function buildDecks(poolEntries, rawOpts, combos = [], onProgress) {
   results.sort((a, b) => b.score - a.score);
   // explain
   for (const r of results) { r.synWhy = synWhy; explain(r.ctx, r, synWhy); }
-  return { results, poolSize: entries.reduce((a, e) => a + e.count, 0), ignored: entries.filter(e => e.illegal).map(e => e.card.name) };
+  return { results, poolSize: entries.reduce((a, e) => a + e.count, 0), ignored: entries.filter(e => e.illegal).map(e => e.card.name), pruned };
 }
 
 function pickCommanderCandidates(entries, opts) {
@@ -231,7 +250,8 @@ function optimise(ctx0, run) {
     const ok = inColours(c, colors, opts);
     const isMust = opts.mustSet.has(c.key);
     if (!ok.ok) { if (isMust && opts.mode !== 'commander') { /* must-include outside colours: still allowed (user's call) */ avail[i] = 1; forced.push(i); castPenalty[i] = 0; } continue; }
-    avail[i] = (singleton && !c.anyNumber) ? 1 : e.count;
+    // constructed decks: max 4 copies of a card (basics and "any number" cards excepted); limited uses what's in the pool
+    avail[i] = (singleton && !c.anyNumber) ? 1 : (opts.mode === 'constructed' && !c.anyNumber) ? Math.min(4, e.count) : e.count;
     castPenalty[i] = ok.penalty * 2;
     if (run.splash && !inColours(c, run.main, opts).ok) {
       // splash discipline: one pip of the splash colour, and a card worth splashing (3+ mana or removal)

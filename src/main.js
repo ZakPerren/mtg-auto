@@ -1,6 +1,6 @@
 import { CardDB } from './data/db.js';
 import { ls, idbGet, idbSet } from './data/store.js';
-import { parseList, resolveList } from './data/pool.js';
+import { parseList, resolveList, parseCsv, looksLikeCsv } from './data/pool.js';
 import { openPacks, PACK_SIZE, MAX_RARE } from './data/packs.js';
 import * as SF from './data/scryfall.js';
 import { buildDecks, PRESETS, rescore } from './engine/builder.js';
@@ -43,7 +43,23 @@ function addToPool(card, delta = 1) {
   p.items = p.items.filter(x => x.count > 0);
   save();
 }
-const countInPool = (card) => pool().items.find(x => x.name === card.name)?.count || 0;
+// Add many cards in one go (CSV/collection imports): one lookup map and a single save
+function addManyToPool(entries) {
+  const p = pool();
+  const idx = new Map(p.items.map(x => [x.name, x]));
+  for (const { card, count } of entries) {
+    if (!count) continue;
+    const it = idx.get(card.name);
+    if (it) it.count += count; else { const n = { name: card.name, count }; p.items.push(n); idx.set(card.name, n); }
+  }
+  save();
+}
+let _cntCache = null, _cntKey = null;
+const countInPool = (card) => {
+  const p = pool();
+  if (_cntKey !== p.items || !_cntCache || _cntCache.size !== p.items.length) { _cntCache = new Map(p.items.map(x => [x.name, x])); _cntKey = p.items; }
+  return _cntCache.get(card.name)?.count || 0;
+};
 const poolTotal = () => pool().items.reduce((a, x) => a + x.count, 0);
 
 // ---------------- boot ----------------
@@ -67,7 +83,6 @@ async function boot() {
     addEventListener('offline', () => $('#netstate').textContent = 'offline');
     window.addEventListener('hashchange', route);
     setPlaytestPersistence((st) => ls.set('playtest', st));
-    restoreSession();
     route();
     // keep each tab's scroll position, so a reload (e.g. unfolding the phone) lands where you were
     const view = $('#view');
@@ -160,11 +175,17 @@ function renderPoolList() {
     sum.push(`<div class="sumcol">${pip(g)}<b>${n}</b><small>${cr} cre · ${rm} rem</small></div>`);
   }
   $('#poolSummary').innerHTML = sum.join('');
-  list.innerHTML = entries.length ? COLOR_ORDER.filter(g => groups[g]).map(g => `
-    <h3 class="grp">${GROUP_LABEL[g]} <span class="muted">${groups[g].reduce((a, e) => a + e.count, 0)}</span></h3>
-    ${groups[g].sort((a, b) => a.card.cmc - b.card.cmc || a.card.name.localeCompare(b.card.name)).map(e => cardRow(e.card, { right: stepper(e.card, e.count) })).join('')}`).join('')
+  const LIMIT = 60; S.openGroups ||= new Set();
+  list.innerHTML = entries.length ? COLOR_ORDER.filter(g => groups[g]).map(g => {
+    const rows = groups[g].sort((a, b) => a.card.cmc - b.card.cmc || a.card.name.localeCompare(b.card.name));
+    const shown = S.openGroups.has(g) ? rows : rows.slice(0, LIMIT);
+    return `<h3 class="grp">${GROUP_LABEL[g]} <span class="muted">${groups[g].reduce((a, e) => a + e.count, 0)}${rows.length > LIMIT ? ` · ${rows.length} different` : ''}</span></h3>
+    ${shown.map(e => cardRow(e.card, { right: stepper(e.card, e.count) })).join('')}
+    ${rows.length > LIMIT && !S.openGroups.has(g) ? `<button class="ghost small" data-showall="${g}">Show all ${rows.length}</button>` : ''}`;
+  }).join('')
     : `<p class="muted">No cards yet. Pick your set, then type names or tap cards from the set list.</p>`;
   bindSteppers(list, () => renderPoolList());
+  $$('[data-showall]', list).forEach(b => b.onclick = () => { S.openGroups.add(b.dataset.showall); renderPoolList(); });
   bindCardOpen(list);
   const total = $('h2 .muted'); if (total) total.textContent = poolTotal() + ' cards';
   const tb = $('#toBuild'); if (tb) tb.disabled = !poolTotal();
@@ -254,8 +275,7 @@ function poolPacksInput(box) {
     const packs = openPacks(db, p.sets, count);
     if (packs.every(pk => !pk.cards.length)) { $('#packOut').innerHTML = '<p class="warn">No card list for these sets — download the set in Data first.</p>'; return; }
     if ($('#packReplace').checked) p.items = [];
-    for (const pk of packs) for (const x of pk.cards) addToPool(db.cards[x.idx], 1);
-    save();
+    addManyToPool(packs.flatMap(pk => pk.cards.map(x => ({ card: db.cards[x.idx], count: 1 }))));
     const RL = { c: 'C', u: 'U', r: 'R', m: 'M' };
     $('#packOut').innerHTML = packs.map((pk, i) => `<details ${i === 0 ? 'open' : ''}><summary>Pack ${i + 1} · ${esc(pk.set)} · ${pk.cards.length} cards · ${pk.cards.filter(x => x.rarity === 'r' || x.rarity === 'm').length} R/M</summary>
       ${pk.cards.slice().sort((a, b) => 'mruc'.indexOf(a.rarity) - 'mruc'.indexOf(b.rarity)).map(x => { const c = db.cards[x.idx]; return `<div class="crow" data-card="${esc(c.name)}"><span class="cost">${manaHtml(c.manaCost)}</span><span class="cname"><span class="rar r-${RL[x.rarity]}"></span>${esc(c.name)}</span><span class="right muted">${RL[x.rarity]}</span></div>`; }).join('')}</details>`).join('');
@@ -266,22 +286,47 @@ function poolPacksInput(box) {
 }
 
 function poolPasteInput(box) {
-  box.innerHTML = `<textarea id="pasteIn" rows="7" placeholder="Paste an MTG Arena export or any list:\n1 Lightning Bolt (2X2) 117\n3x Island\nShock"></textarea>
-    <div class="row"><button id="pasteAdd" class="primary">Add to pool</button><button id="pasteReplace" class="ghost">Replace pool</button></div><div id="pasteMsg"></div>`;
-  const go = (replace) => {
-    const items = parseList($('#pasteIn').value);
+  box.innerHTML = `<textarea id="pasteIn" rows="7" placeholder="Paste an MTG Arena export, a CSV, or any list:\n1 Lightning Bolt (2X2) 117\n3x Island\nShock"></textarea>
+    <div class="row wrap"><button id="pasteAdd" class="primary">Add to pool</button><button id="pasteReplace" class="ghost">Replace pool</button>
+      <label class="ghost filebtn">Import CSV file<input type="file" id="csvFile" accept=".csv,.txt,.tsv,text/csv,text/plain" hidden></label></div>
+    <p class="hint">CSV: MTG Arena collection exports (Id, Name, Set, Count…) and Moxfield / ManaBox / Deckbox / Archidekt style files with a Name and Count/Quantity column. Rows with a count of 0 are skipped.</p>
+    <div id="pasteMsg"></div>`;
+  const go = (replace, text = $('#pasteIn').value) => {
+    if (looksLikeCsv(text)) return goCsv(replace, text);
+    const items = parseList(text);
     const { entries, missing } = resolveList(db, items);
     const p = pool();
     if (replace) p.items = [];
-    for (const e of entries) addToPool(e.card, e.count);
+    addManyToPool(entries);
     const sets = [...new Set(items.map(i => i.set).filter(s => s && db.sets[s]))];
     if (!p.sets.length && sets.length && sets.length <= 3) p.sets = sets;
     save();
     $('#pasteMsg').innerHTML = `<p>Added ${entries.reduce((a, e) => a + e.count, 0)} cards.${missing.length ? `<br><span class="warn">Not found (${missing.length}): ${missing.map(esc).join(', ')}</span><br><span class="hint">New set? Download it in Data → "Get a set from Scryfall".</span>` : ''}</p>`;
     renderPoolList();
   };
+  const goCsv = (replace, text) => {
+    const res = parseCsv(text);
+    if (res.error) { $('#pasteMsg').innerHTML = `<p class="warn">${esc(res.error)}</p>`; return; }
+    const { entries, missing } = resolveList(db, res.items);
+    const p = pool();
+    if (replace) p.items = [];
+    addManyToPool(entries);
+    const copies = entries.reduce((a, e) => a + e.count, 0);
+    $('#pasteMsg').innerHTML = `<p><b>${esc(res.format)}</b>: ${res.rows.toLocaleString()} rows → ${entries.length.toLocaleString()} different cards (${copies.toLocaleString()} copies) added.${res.skippedZero ? ` ${res.skippedZero.toLocaleString()} rows with 0 owned skipped.` : ''}
+      ${missing.length ? `<br><span class="warn">Not found (${missing.length}): ${missing.slice(0, 30).map(esc).join(', ')}${missing.length > 30 ? '…' : ''}</span><br><span class="hint">Usually Arena-only Alchemy cards or brand-new cards — Data → "Get new cards" may add them.</span>` : ''}
+      ${entries.length > 300 ? `<br><span class="hint">That's a whole collection — on Build, pick <b>Constructed (60)</b> or <b>Brawl</b> and set the format (e.g. Standard / Historic) so only legal cards are used.</span>` : ''}</p>`;
+    renderPoolList();
+  };
   $('#pasteAdd').onclick = () => go(false);
   $('#pasteReplace').onclick = () => go(true);
+  $('#csvFile').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    $('#pasteMsg').innerHTML = '<div class="spinner"></div> Reading file…';
+    const text = await f.text();
+    const replace = !poolTotal() ? true : await askConfirm(`Replace the current pool (${poolTotal()} cards) with ${f.name}? Cancel adds to it instead.`);
+    go(replace, text);
+    e.target.value = '';
+  };
 }
 
 function openSetPicker() {
@@ -471,6 +516,13 @@ function guessSets(entries) {
 // ---------------- DECK ----------------
 const BASIC_NAME = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
 function viewDeck(v) {
+  if (!S.result && !S.restoreTried && ls.get('session', null)) {
+    // rebuild the last deck on demand (big collections take a few seconds, so only when you open this tab)
+    S.restoreTried = true;
+    v.innerHTML = '<section class="card"><div class="spinner"></div> Restoring your last deck…</section>';
+    setTimeout(() => { restoreSession(); render(); }, 30);
+    return;
+  }
   if (!S.result) {
     v.innerHTML = `<section class="card"><h2>No deck yet</h2><p>Add your pool, then tap <b>Build</b>.</p>${S.decks.length ? '<h3>Saved decks</h3>' + savedDecksHtml() : ''}</section>`;
     bindSaved(v); return;
