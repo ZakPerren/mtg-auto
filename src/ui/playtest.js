@@ -11,9 +11,9 @@ const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math
 let persist = null; // callback(state|null) so the game survives the app being reloaded (e.g. unfolding the Fold)
 export function setPlaytestPersistence(fn) { persist = fn; }
 
-export function openPlaytest(deckList, title = 'Playtest') {
-  // deckList: [{card, count}]
-  G = { deckList, title, life: 20, opp: 20, turn: 0, library: [], hand: [], battlefield: [], graveyard: [], exile: [], mulligans: 0, bottomNeeded: 0, log: [] };
+export function openPlaytest(deckList, title = 'Playtest', startLife = 20) {
+  // deckList: [{card, count}]; startLife: 20 normally, 25 for Brawl, 40 for Commander
+  G = { deckList, title, startLife, life: startLife, opp: startLife, turn: 0, library: [], hand: [], battlefield: [], graveyard: [], exile: [], mulligans: 0, bottomNeeded: 0, log: [] };
   mount();
   newGame();
 }
@@ -28,13 +28,13 @@ function mount() {
 const ZONES = ['library', 'hand', 'battlefield', 'graveyard', 'exile'];
 function snapshot() {
   const z = (list) => list.map(o => o.token ? { t: 1, n: o.card.name, p: o.card.power, tg: o.card.toughness, tp: o.tapped, c: o.counters } : { n: o.card.name, tp: o.tapped, c: o.counters });
-  return { title: G.title, life: G.life, opp: G.opp, turn: G.turn, phase: G.phase, mulligans: G.mulligans, bottomNeeded: G.bottomNeeded, landPlayed: G.landPlayed,
+  return { title: G.title, startLife: G.startLife, life: G.life, opp: G.opp, turn: G.turn, phase: G.phase, mulligans: G.mulligans, bottomNeeded: G.bottomNeeded, landPlayed: G.landPlayed,
     deck: G.deckList.map(x => [x.card.name, x.count]), ...Object.fromEntries(ZONES.map(k => [k, z(G[k])])) };
 }
 export function restorePlaytest(saved, getCard) {
   try {
     const deckList = saved.deck.map(([n, count]) => ({ card: getCard(n), count })).filter(x => x.card);
-    G = { deckList, title: saved.title, life: saved.life, opp: saved.opp, turn: saved.turn, phase: saved.phase, mulligans: saved.mulligans, bottomNeeded: saved.bottomNeeded, landPlayed: saved.landPlayed, log: [] };
+    G = { deckList, title: saved.title, startLife: saved.startLife || 20, life: saved.life, opp: saved.opp, turn: saved.turn, phase: saved.phase, mulligans: saved.mulligans, bottomNeeded: saved.bottomNeeded, landPlayed: saved.landPlayed, log: [] };
     for (const k of ZONES) G[k] = (saved[k] || []).map(o => o.t
       ? { id: ++uid, token: true, tapped: o.tp, counters: o.c, card: tokenCard(o.n, o.p, o.tg) }
       : { id: ++uid, card: getCard(o.n), tapped: o.tp, counters: o.c }).filter(o => o.card);
@@ -48,7 +48,7 @@ function close() { root?.remove(); root = null; document.body.classList.remove('
 
 function newGame() {
   G.library = shuffle(G.deckList.flatMap(({ card, count }) => Array.from({ length: count }, () => ({ id: ++uid, card, tapped: false, counters: 0 }))));
-  G.hand = []; G.battlefield = []; G.graveyard = []; G.exile = []; G.life = 20; G.opp = 20; G.turn = 0; G.mulligans = 0; G.bottomNeeded = 0; G.landPlayed = false;
+  G.hand = []; G.battlefield = []; G.graveyard = []; G.exile = []; G.life = G.startLife || 20; G.opp = G.startLife || 20; G.turn = 0; G.mulligans = 0; G.bottomNeeded = 0; G.landPlayed = false;
   draw(7); G.phase = 'mulligan';
   render();
 }

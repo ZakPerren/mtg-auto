@@ -162,8 +162,10 @@ const formats = {
   pauper: readFormat(path.join(FD, 'Sanctioned/Pauper.txt')),
   historic: readFormat(path.join(FD, 'Sanctioned/Historic.txt')),
   commander: readFormat(path.join(FD, 'Casual/Commander.txt')),
-  brawl: readFormat(path.join(FD, 'Casual/Brawl.txt')),
+  brawl: readFormat(path.join(FD, 'Casual/Brawl.txt')),   // Arena "Brawl" (formerly Historic Brawl): 100 cards, Arena card pool, own ban list
 };
+// Standard Brawl: 60 cards, Standard-legal sets plus Arcane Signet and Command Tower, its own (currently empty) ban list
+formats.standardbrawl = { sets: formats.standard.sets, banned: new Set(), restricted: new Set(), additional: new Set(['Arcane Signet', 'Command Tower']), rarities: null };
 const RCODE = { common: 'C', uncommon: 'U', rare: 'R', mythic: 'M', land: 'L', special: 'S' };
 function legalities(name, printings, isDigitalOnly) {
   const out = {};

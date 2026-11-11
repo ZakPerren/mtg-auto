@@ -6,11 +6,12 @@ import { consistency } from './mana.js';
 import { fitsArchetype } from './archetypes.js';
 
 export const PRESETS = {
-  sealed: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, label: 'Sealed / Prerelease (40)' },
-  draft: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, label: 'Draft (40)' },
-  constructed: { mode: 'constructed', deckSize: 60, basicsFree: true, singleton: false, maxColors: 3, splash: false, label: 'Constructed (60)' },
-  brawl: { mode: 'commander', deckSize: 60, basicsFree: true, singleton: true, maxColors: 5, splash: false, label: 'Brawl (60, singleton)' },
-  commander: { mode: 'commander', deckSize: 100, basicsFree: true, singleton: true, maxColors: 5, splash: false, label: 'Commander (100, singleton)' },
+  sealed: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, legality: '', brawl: false, life: 20, label: 'Sealed / Prerelease (40)' },
+  draft: { mode: 'limited', deckSize: 40, basicsFree: true, singleton: false, maxColors: 3, splash: true, legality: '', brawl: false, life: 20, label: 'Draft (40)' },
+  constructed: { mode: 'constructed', deckSize: 60, basicsFree: true, singleton: false, maxColors: 3, splash: false, brawl: false, life: 20, label: 'Constructed (60)' },
+  standardbrawl: { mode: 'commander', deckSize: 60, basicsFree: true, singleton: true, maxColors: 5, splash: false, legality: 'standardbrawl', brawl: true, life: 25, label: 'Standard Brawl (60, Standard cards)' },
+  brawl: { mode: 'commander', deckSize: 100, basicsFree: true, singleton: true, maxColors: 5, splash: false, legality: 'brawl', brawl: true, life: 25, label: 'Brawl — Arena (100, all Arena cards)' },
+  commander: { mode: 'commander', deckSize: 100, basicsFree: true, singleton: true, maxColors: 5, splash: false, legality: '', brawl: false, life: 40, label: 'Commander (100, singleton)' },
 };
 
 const STYLE = {
@@ -194,8 +195,10 @@ export function buildDecks(poolEntries, rawOpts, combos = [], onProgress) {
   return { results, poolSize: entries.reduce((a, e) => a + e.count, 0), ignored: entries.filter(e => e.illegal).map(e => e.card.name), pruned };
 }
 
+// Commander: legendary creature (or Vehicle/Spacecraft, or "can be your commander"). Brawl also allows any legendary planeswalker.
+export function isCommanderFor(card, opts) { return card.canBeCommander || (!!opts?.brawl && card.isLegendary && card.types.includes('Planeswalker')); }
 function pickCommanderCandidates(entries, opts) {
-  let cands = entries.filter(e => e.card.canBeCommander && !e.illegal);
+  let cands = entries.filter(e => isCommanderFor(e.card, opts) && !e.illegal);
   if (opts.commander && opts.commander !== 'auto') cands = cands.filter(e => e.card.key === opts.commander.toLowerCase());
   const must = sortColors(opts.mustColors || '');
   const banned = opts.excludeColors || '';

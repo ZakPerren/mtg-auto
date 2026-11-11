@@ -3,7 +3,7 @@ import { ls, idbGet, idbSet } from './data/store.js';
 import { parseList, resolveList, parseCsv, looksLikeCsv } from './data/pool.js';
 import { openPacks, PACK_SIZE, MAX_RARE } from './data/packs.js';
 import * as SF from './data/scryfall.js';
-import { buildDecks, PRESETS, rescore } from './engine/builder.js';
+import { buildDecks, PRESETS, rescore, isCommanderFor } from './engine/builder.js';
 import { setArchetypes, fitsArchetype } from './engine/archetypes.js';
 import { analyse, ROLE_LABEL, themeLabel, GOALS } from './engine/tags.js';
 import { powerOf } from './engine/power.js';
@@ -19,10 +19,16 @@ const fetchJson = async (u) => { const r = await fetch(u); if (!r.ok) throw new 
 
 // ---------------- state ----------------
 const DEFAULT_OPTS = { preset: 'sealed', ...PRESETS.sealed, style: 'auto', synergyWeight: 1, landCount: null, maxSplashCards: 3, mustInclude: [], exclude: [], mustColors: '', excludeColors: '', legality: '', commander: 'auto', onlineCombos: true };
+// Older versions had one "Brawl (60)" preset that mixed Standard Brawl's size with Arena Brawl's card pool
+function migrateOpts(o) {
+  if (o.preset === 'brawl' && o.deckSize === 60) Object.assign(o, PRESETS.standardbrawl, { preset: 'standardbrawl' });
+  if (o.preset && PRESETS[o.preset] && o.life == null) o.life = PRESETS[o.preset].life;
+  return o;
+}
 const S = {
   pools: ls.get('pools', null) || [{ id: 'p1', name: 'My pool', sets: [], items: [] }],
   poolId: ls.get('poolId', 'p1'),
-  opts: { ...DEFAULT_OPTS, ...ls.get('opts', {}) },
+  opts: migrateOpts({ ...DEFAULT_OPTS, ...ls.get('opts', {}) }),
   result: null, resultIdx: 0,
   decks: ls.get('decks', []),
   tab: 'pool', poolMode: ls.get('poolMode', 'search'),
@@ -348,7 +354,7 @@ function openSetPicker() {
 function viewBuild(v) {
   const o = S.opts;
   const entries = poolEntries();
-  const legends = entries.filter(e => e.card.canBeCommander);
+  const legends = entries.filter(e => isCommanderFor(e.card, o));
   const colorState = (c) => o.mustColors.includes(c) ? 'must' : o.excludeColors.includes(c) ? 'no' : '';
   v.innerHTML = `
   <section class="card">
@@ -359,8 +365,10 @@ function viewBuild(v) {
       <label>Deck size<input id="deckSize" type="number" min="20" max="250" value="${o.deckSize}"></label>
       <label>Lands<input id="landCount" type="number" min="0" max="60" placeholder="Auto" value="${o.landCount ?? ''}"></label>
       <label>Max colours<select id="maxColors">${[1, 2, 3, 4, 5].map(n => `<option ${o.maxColors === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
-      <label>Format legality<select id="legality"><option value="">Any (pool decides)</option>${['standard', 'pioneer', 'modern', 'legacy', 'vintage', 'pauper', 'historic', 'commander', 'brawl'].map(f => `<option ${o.legality === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label>
+      <label>Format legality<select id="legality"><option value="">Any (pool decides)</option>${[['standard', 'Standard'], ['pioneer', 'Pioneer'], ['modern', 'Modern'], ['legacy', 'Legacy'], ['vintage', 'Vintage'], ['pauper', 'Pauper'], ['historic', 'Historic (Arena)'], ['commander', 'Commander'], ['standardbrawl', 'Standard Brawl'], ['brawl', 'Brawl (Arena)']].map(([f, l]) => `<option value="${f}" ${o.legality === f ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
+    ${o.preset === 'standardbrawl' ? '<p class="hint">Standard Brawl: exactly 60 cards including the commander, singleton, Standard-legal cards plus Arcane Signet and Command Tower, 25 life. Commander: a legendary creature or planeswalker.</p>' : ''}
+    ${o.preset === 'brawl' ? '<p class="hint">Brawl (Arena): exactly 100 cards including the commander, singleton, any card on MTG Arena (Alchemy included) except the Brawl ban list, 25 life. Commander: a legendary creature or planeswalker.</p>' : ''}
     <div class="toggles">
       <label class="inline"><input type="checkbox" id="basicsFree" ${o.basicsFree ? 'checked' : ''}> Unlimited basic lands</label>
       <label class="inline"><input type="checkbox" id="splash" ${o.splash ? 'checked' : ''}> Allow a splash</label>
@@ -606,7 +614,7 @@ function viewDeck(v) {
     if (r.run.commander) list.push({ card: r.run.commander.card, count: 1 });
     return list;
   };
-  $('#playtest').onclick = () => openPlaytest(deckList(), `${r.main}${r.splash ? '+' + r.splash : ''}`);
+  $('#playtest').onclick = () => openPlaytest(deckList(), `${r.main}${r.splash ? '+' + r.splash : ''}`, S.result.opts.life || 20);
   $('#cacheImgs').onclick = () => {
     if (!navigator.onLine) { toast('Connect to the internet first'); return; }
     const n = precacheImages(deckList().map(x => x.card), (k) => toast(`${k} card images saved for offline use`));
